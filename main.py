@@ -11,6 +11,9 @@ import hydra
 from omegaconf import DictConfig
 import wandb
 import tqdm
+import os
+import glob
+import re
 
 config = RobertaConfig.from_pretrained('roberta-base')
 model_scratch = RobertaModel(config)
@@ -64,6 +67,8 @@ class Encoder(nn.Module):
 
         config = RobertaConfig.from_pretrained('roberta-base')
         self.backbone = RobertaModel(config)
+
+        self.backbone.gradient_checkpointing_enable()
 
         self.proj = MLP(768, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
 
@@ -224,13 +229,36 @@ def main(cfg: DictConfig):
 
     scaler = GradScaler("cuda", enabled=True)
 
-    for epoch in range(cfg.epochs):
+    start_epoch = 0
+    new_checkpoints = glob.glob("checkpoint_epoch_*.pt")
+    old_checkpoints = glob.glob("roberta_lejepa_epoch_*.pt")
+
+    if new_checkpoints:
+        latest_cp = max(new_checkpoints, key=lambda x: int(re.search(r'epoch_(\d+)', x).group(1)))
+        print(f"Resuming from full checkpoint: {latest_cp}")
+        checkpoint = torch.load(latest_cp, map_location=cfg.device)
+        net.load_state_dict(checkpoint['model_state_dict'])
+        optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+    elif old_checkpoints:
+        latest_cp = max(old_checkpoints, key=lambda x: int(re.search(r'epoch_(\d+)', x).group(1)))
+        print(f"Found old format checkpoint: {latest_cp}")
+        state_dict = torch.load(latest_cp, map_location=cfg.device)
+        net.load_state_dict(state_dict)
+        start_epoch = int(re.search(r'epoch_(\d+)', latest_cp).group(1)) + 1
+        print("Note: Optimizer/Scheduler states missing in old format, restarting them.")
+
+    for epoch in range(start_epoch, cfg.epochs):
         net.train()
 
+        epoch_sigreg_loss = 0.0
+        num_steps = 0
         for step, (global_views, local_views) in enumerate(tqdm.tqdm(train, total=steps_per_epoch)):
             if step >= steps_per_epoch:
                 break
-            
+
             if device == "cuda" or device == "mps":
                 with autocast(device_type=device, dtype=torch.bfloat16):
                     global_views = global_views.to(cfg.device, non_blocking=True).long()
@@ -265,6 +293,9 @@ def main(cfg: DictConfig):
             scaler.update()
             scheduler.step()
 
+            epoch_sigreg_loss += sigreg_loss.item()
+            num_steps += 1
+
             wandb.log(
                 {
                     "train/lejepa": loss.item(),
@@ -274,8 +305,17 @@ def main(cfg: DictConfig):
                 }
             )
 
+        avg_sigreg = epoch_sigreg_loss / num_steps if num_steps > 0 else 0.0
+        wandb.log({"train/epoch_avg_sigreg": avg_sigreg, "epoch": epoch})
 
-        torch.save(net.state_dict(), f"roberta_lejepa_epoch_{epoch}.pt")
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': net.state_dict(),
+            'optimizer_state_dict': optimiser.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'scaler_state_dict': scaler.state_dict()
+        }
+        torch.save(checkpoint, f"checkpoint_epoch_{epoch}.pt")
 
     wandb.finish()
 
