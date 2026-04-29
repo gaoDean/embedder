@@ -67,11 +67,11 @@ class Encoder(nn.Module):
         self.backbone = AutoModel.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
 
         self.proj = MLP(1024, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
-        
+
         # Cache pad_id to avoid checking on every forward pass
-        self.pad_id = self.backbone.config.pad_token_id
+        self.pad_id = getattr(self.backbone.config, 'pad_token_id', None)
         if self.pad_id is None:
-            self.pad_id = self.backbone.config.eos_token_id
+            self.pad_id = getattr(self.backbone.config, 'eos_token_id', 151645)
 
     # def forward(self, x):
     #     N, V = x.shape[:2]
@@ -84,7 +84,7 @@ class Encoder(nn.Module):
         # flatten N and V to process through roberta
         # shape becomes [N*V, Seq_Len]
         input_ids = input_ids.flatten(0, 1)
-            
+
         if attention_mask is None:
             attention_mask = (input_ids != self.pad_id).long()
         else:
@@ -110,13 +110,34 @@ class HFDataset(Dataset):
         self.local_len_max = 48 # roughly the size of a long sentence
         self.mask_prob = mask_prob
 
-        self.ds = load_dataset("ms_marco", "v2.1", split=split)
-        # self.ds = load_dataset("JeanKaddour/minipile", split=split)
-
+        # Initialize tokenizer once
         self.tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
-        # Ensure tokenizer has a pad token
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Load and Pre-tokenize the dataset using Arrow/Map
+        ds = load_dataset("ms_marco", "v2.1", split=split)
+
+        def tokenize_function(examples):
+            # MS Marco has lists of passages, we can just join them or pick the first for the map
+            # For exact parity with your random.choice, you can flatten or just pre-tokenize the queries/passages
+            # Here we tokenize the query as a fallback, and the first passage (or join them)
+            texts = []
+            for q, p in zip(examples["query"], examples["passages"]):
+                if len(p["passage_text"]) > 0:
+                    texts.append(p["passage_text"][0])
+                else:
+                    texts.append(q)
+            return self.tokenizer(texts, add_special_tokens=True, truncation=False)
+
+        # map caches to disk, runs heavily parallelized in C++ (Rust in fast tokenizers)
+        self.ds = ds.map(
+            tokenize_function,
+            batched=True,
+            num_proc=os.cpu_count(),
+            remove_columns=ds.column_names # Drop raw text to save memory
+        )
+        self.ds.set_format(type="torch", columns=["input_ids"])
 
     def _random_crop(self, tokens, target_len):
         """Simulates an image 'crop' by taking a random contiguous span of tokens."""
@@ -150,24 +171,15 @@ class HFDataset(Dataset):
         # Sample tokens to mask and replace them with a generic masking strategy
         # since this tokenizer (Qwen based) may not have a dedicated [MASK] token
         masked_indices = torch.bernoulli(prob_matrix).bool()
-        
+
         # If there's no mask_token_id, we can fall back to pad_token_id or random tokens
         mask_id = self.tokenizer.mask_token_id if self.tokenizer.mask_token_id is not None else self.tokenizer.pad_token_id
         masked_tokens[masked_indices] = mask_id
         return masked_tokens
 
     def __getitem__(self, i):
-        row = self.ds[i]
-
-        passages_list = row["passages"]["passage_text"]
-        if len(passages_list) == 0:
-            # Fallback in the extremely rare case of an empty passage list
-            text = row["query"]
-        else:
-            text = random.choice(passages_list)
-
-        # Tokenize the full document first (no padding/truncation yet)
-        tokens = self.tokenizer(text, add_special_tokens=True, return_tensors="pt")["input_ids"][0]
+        # Fetch pre-tokenized integers directly from zero-copy Arrow memory
+        tokens = self.ds[i]["input_ids"]
 
         global_tokens = self._random_crop(tokens, self.global_len)
 
@@ -222,13 +234,13 @@ def main(cfg: DictConfig):
 
     train_ds = HFDataset("train", V=cfg.V)
     test_ds = HFDataset("validation", V=1)
-    
+
     # Load tokenizer for logging
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    
+
     train = DataLoader(
         train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=4, pin_memory=True
     )
@@ -295,25 +307,25 @@ def main(cfg: DictConfig):
                 # Decode the first sample's first global and local view
                 sample_global = global_views[0, 0].cpu().tolist()
                 sample_local = local_views[0, 0].cpu().tolist()
-                
+
                 decoded_global = html.escape(tokenizer.decode(sample_global))
                 decoded_local = html.escape(tokenizer.decode(sample_local))
-                
+
                 wandb.log({
                     "sample/global_view": wandb.Html(f"<pre>{decoded_global}</pre>"),
                     "sample/local_view": wandb.Html(f"<pre>{decoded_local}</pre>"),
                 }, commit=False)
 
             if device == "cuda" or device == "mps":
-                global_views = global_views.to(cfg.device, non_blocking=True).long()
-                local_views = local_views.to(cfg.device, non_blocking=True).long()
+                global_views = global_views.to(cfg.device, non_blocking=True).contiguous()
+                local_views = local_views.to(cfg.device, non_blocking=True).contiguous()
 
                 with autocast(device_type=device, dtype=torch.bfloat16):
                     _, proj_global = net(global_views)
                     _, proj_local = net(local_views)
 
                     inv_loss = (proj_global.mean(0) - proj_local).square().mean()
-                    
+
                     proj = torch.cat([proj_global, proj_local], dim=0)
                     sigreg_loss = sigreg(proj)
 
@@ -323,8 +335,8 @@ def main(cfg: DictConfig):
                 loss = loss / accum_steps
                 scaler.scale(loss).backward()
             else:
-                global_views = global_views.to(cfg.device, non_blocking=True).long()
-                local_views = local_views.to(cfg.device, non_blocking=True).long()
+                global_views = global_views.to(cfg.device, non_blocking=True).contiguous()
+                local_views = local_views.to(cfg.device, non_blocking=True).contiguous()
 
                 _, proj_global = net(global_views)
                 _, proj_local = net(local_views)
