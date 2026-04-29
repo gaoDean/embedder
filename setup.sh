@@ -20,6 +20,14 @@ if [ -f "$HOME/.cargo/env" ]; then
     source "$HOME/.cargo/env"
 fi
 
+if [ ! -d ".git" ]; then
+    echo "Cloning repository..."
+    # Clone into a temporary directory and move files, or clone into 'embedder'
+    # To avoid "directory not empty" errors when cloning into '.'
+    git clone https://github.com/gaoDean/embedder.git /workspace/embedder || git clone https://github.com/gaoDean/embedder.git
+    cd *embedder
+fi
+
 # Sync Python dependencies using uv
 echo "Installing Python dependencies..."
 uv sync

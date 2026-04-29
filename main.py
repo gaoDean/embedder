@@ -266,7 +266,10 @@ def main(cfg: DictConfig):
 
     scheduler = SequentialLR(optimiser, schedulers=[s1, s2], milestones=[warmup_steps])
 
-    scaler = GradScaler("cuda", enabled=True)
+    # Only enable scaler if using CUDA and float16 (though you are using bfloat16, 
+    # we'll keep it conditionally enabled for CUDA just in case)
+    scaler_enabled = (device == "cuda")
+    scaler = GradScaler("cuda" if scaler_enabled else "cpu", enabled=scaler_enabled)
 
     import hydra.utils
     orig_cwd = hydra.utils.get_original_cwd()
@@ -300,9 +303,6 @@ def main(cfg: DictConfig):
         epoch_sigreg_loss = 0.0
         num_steps = 0
 
-        accumulated_proj = []
-        accumulated_inv_loss = 0.0
-
         for step, (global_views, local_views) in enumerate(tqdm.tqdm(train, total=steps_per_epoch)):
             if step >= steps_per_epoch:
                 break
@@ -330,12 +330,12 @@ def main(cfg: DictConfig):
                     _, proj_local = net(local_views)
 
                     inv_loss = (proj_global.mean(0) - proj_local).square().mean()
-
                     proj = torch.cat([proj_global, proj_local], dim=0)
+                    sigreg_loss = sigreg(proj)
 
-                    accumulated_proj.append(proj)
-                    accumulated_inv_loss += inv_loss / accum_steps
+                    loss = (sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)) / accum_steps
 
+                scaler.scale(loss).backward()
             else:
                 global_views = global_views.to(cfg.device, non_blocking=True).contiguous()
                 local_views = local_views.to(cfg.device, non_blocking=True).contiguous()
@@ -344,40 +344,22 @@ def main(cfg: DictConfig):
                 _, proj_local = net(local_views)
 
                 inv_loss = (proj_global.mean(0) - proj_local).square().mean()
-
                 proj = torch.cat([proj_global, proj_local], dim=0)
+                sigreg_loss = sigreg(proj)
 
-                accumulated_proj.append(proj)
-                accumulated_inv_loss += inv_loss / accum_steps
+                loss = (sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)) / accum_steps
+                loss.backward()
 
             # Update weights only after accumulating enough gradients
             if (step + 1) % accum_steps == 0 or (step + 1) == steps_per_epoch:
-
-                # Combine accumulated projections
-                full_proj = torch.cat(accumulated_proj, dim=0)
-
                 if device == "cuda" or device == "mps":
-                    with autocast(device_type=device, dtype=torch.bfloat16):
-                        sigreg_loss = sigreg(full_proj)
-                        loss = sigreg_loss * cfg.lam + accumulated_inv_loss * (1 - cfg.lam)
-
-                    scaler.scale(loss).backward()
-
                     scaler.step(optimiser)
                     scaler.update()
                 else:
-                    sigreg_loss = sigreg(full_proj)
-                    loss = sigreg_loss * cfg.lam + accumulated_inv_loss * (1 - cfg.lam)
-                    loss.backward()
-
                     optimiser.step()
 
                 optimiser.zero_grad(set_to_none=True)
                 scheduler.step()
-
-                # Reset accumulators
-                accumulated_proj = []
-                accumulated_inv_loss = 0.0
 
             if 'sigreg_loss' in locals():
                 epoch_sigreg_loss += sigreg_loss.item()
