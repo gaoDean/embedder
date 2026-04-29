@@ -101,7 +101,7 @@ class Encoder(nn.Module):
         return cls_embed, z
 
 class HFDataset(Dataset):
-    def __init__(self, split="train", V=8, V_global=1, V_local=8, mask_prob=0.15):
+    def __init__(self, split="train", V=8, V_global=1, V_local=8, mask_prob=0.25):
         self.V = V
         self.V_global = V_global
         self.V_local = V_local
@@ -266,7 +266,7 @@ def main(cfg: DictConfig):
 
     scheduler = SequentialLR(optimiser, schedulers=[s1, s2], milestones=[warmup_steps])
 
-    # Only enable scaler if using CUDA and float16 (though you are using bfloat16, 
+    # Only enable scaler if using CUDA and float16 (though you are using bfloat16,
     # we'll keep it conditionally enabled for CUDA just in case)
     scaler_enabled = (device == "cuda")
     scaler = GradScaler("cuda" if scaler_enabled else "cpu", enabled=scaler_enabled)
