@@ -15,8 +15,7 @@ import os
 import glob
 import re
 
-config = RobertaConfig.from_pretrained('roberta-base')
-model_scratch = RobertaModel(config)
+
 
 
 # https://github.com/galilai-group/lejepa/blob/main/MINIMAL.md
@@ -65,8 +64,12 @@ class Encoder(nn.Module):
     def __init__(self, proj_dim=128):
         super().__init__()
 
-        config = RobertaConfig.from_pretrained('roberta-base')
-        self.backbone = RobertaModel(config)
+        self.backbone = RobertaModel.from_pretrained('distilroberta-base')
+        
+        # DistilRoBERTa has 6 layers. We reinitialize the top 3 layers (50%) 
+        # so it keeps basic language understanding but learns higher-level features from scratch.
+        for layer in self.backbone.encoder.layer[3:]:
+            layer.apply(self.backbone._init_weights)
 
         self.proj = MLP(768, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
 
@@ -108,7 +111,7 @@ class HFDataset(Dataset):
         self.ds = load_dataset("ms_marco", "v2.1", split=split)
         # self.ds = load_dataset("JeanKaddour/minipile", split=split)
 
-        self.tokenizer = AutoTokenizer.from_pretrained("roberta-base")
+        self.tokenizer = AutoTokenizer.from_pretrained("distilroberta-base")
 
     def _random_crop(self, tokens, target_len):
         """Simulates an image 'crop' by taking a random contiguous span of tokens."""
@@ -206,8 +209,13 @@ def main(cfg: DictConfig):
 
     train_ds = HFDataset("train", V=cfg.V)
     test_ds = HFDataset("validation", V=1)
+    
+    # Load tokenizer for logging
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained("distilroberta-base")
+    
     train = DataLoader(
-        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=1
+        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=0
     )
     test = DataLoader(test_ds, batch_size=256, num_workers=4)
 
@@ -218,7 +226,7 @@ def main(cfg: DictConfig):
 
     accum_steps = getattr(cfg, "accum_steps", 4)
     steps_per_epoch = getattr(cfg, "steps_per_epoch", 1000)
-    
+
     # Adjust scheduler steps since we only step the optimizer every `accum_steps`
     warmup_steps = max(1, steps_per_epoch // accum_steps)
     total_steps = warmup_steps * cfg.epochs
@@ -241,9 +249,10 @@ def main(cfg: DictConfig):
         latest_cp = max(new_checkpoints, key=lambda x: int(re.search(r'epoch_(\d+)', x).group(1)))
         print(f"Resuming from full checkpoint: {latest_cp}")
         checkpoint = torch.load(latest_cp, map_location=cfg.device)
-        net.load_state_dict(checkpoint['model_state_dict'])
-        optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        net.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        # Intentionally NOT loading optimizer and scheduler to start with a fresh learning rate
+        # optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
+        # scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
     elif old_checkpoints:
@@ -264,42 +273,63 @@ def main(cfg: DictConfig):
             if step >= steps_per_epoch:
                 break
 
-            if device == "cuda" or device == "mps":
-                with autocast(device_type=device, dtype=torch.bfloat16):
-                    global_views = global_views.to(cfg.device, non_blocking=True).long()
-                    local_views = local_views.to(cfg.device, non_blocking=True).long()
+            if step % 10 == 0:
+                import html
+                # Decode the first sample's first global and local view
+                sample_global = global_views[0, 0].cpu().tolist()
+                sample_local = local_views[0, 0].cpu().tolist()
+                
+                decoded_global = html.escape(tokenizer.decode(sample_global))
+                decoded_local = html.escape(tokenizer.decode(sample_local))
+                
+                wandb.log({
+                    "sample/global_view": wandb.Html(f"<pre>{decoded_global}</pre>"),
+                    "sample/local_view": wandb.Html(f"<pre>{decoded_local}</pre>"),
+                }, commit=False)
 
+            if device == "cuda" or device == "mps":
+                global_views = global_views.to(cfg.device, non_blocking=True).long()
+                local_views = local_views.to(cfg.device, non_blocking=True).long()
+
+                with autocast(device_type=device, dtype=torch.bfloat16):
                     _, proj_global = net(global_views)
                     _, proj_local = net(local_views)
 
+                    inv_loss = (proj_global.mean(0) - proj_local).square().mean()
+                    
                     proj = torch.cat([proj_global, proj_local], dim=0)
-
-                    inv_loss = (proj.mean(0) - proj).square().mean()
                     sigreg_loss = sigreg(proj)
 
                     loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
+
+                # Normalize the loss based on accumulation steps
+                loss = loss / accum_steps
+                scaler.scale(loss).backward()
             else:
-                global_views = global_views.to(cfg.device, non_blocking=True)
-                local_views = local_views.to(cfg.device, non_blocking=True)
+                global_views = global_views.to(cfg.device, non_blocking=True).long()
+                local_views = local_views.to(cfg.device, non_blocking=True).long()
 
                 _, proj_global = net(global_views)
                 _, proj_local = net(local_views)
 
-                proj = torch.cat([proj_global, proj_local], dim=0)
+                inv_loss = (proj_global.mean(0) - proj_local).square().mean()
 
-                inv_loss = (proj.mean(0) - proj).square().mean()
+                proj = torch.cat([proj_global, proj_local], dim=0)
                 sigreg_loss = sigreg(proj)
 
                 loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
 
-            # Normalize the loss based on accumulation steps
-            loss = loss / accum_steps
-            scaler.scale(loss).backward()
+                # Normalize the loss based on accumulation steps
+                loss = loss / accum_steps
+                loss.backward()
 
             # Update weights only after accumulating enough gradients
             if (step + 1) % accum_steps == 0 or (step + 1) == steps_per_epoch:
-                scaler.step(optimiser)
-                scaler.update()
+                if device == "cuda" or device == "mps":
+                    scaler.step(optimiser)
+                    scaler.update()
+                else:
+                    optimiser.step()
                 optimiser.zero_grad()
                 scheduler.step()
 
