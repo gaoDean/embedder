@@ -2,10 +2,15 @@ import torch
 import torch.nn as nn
 from torch.amp import GradScaler
 from torch import autocast
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from datasets import load_dataset
 from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoTokenizer
 import random
+import hydra
+from omegaconf import DictConfig
+import wandb
+import tqdm
 
 config = RobertaConfig.from_pretrained('roberta-base')
 model_scratch = RobertaModel(config)
@@ -88,7 +93,8 @@ class Encoder(nn.Module):
         return cls_embed, z
 
 class HFDataset(Dataset):
-    def __init__(self, split="train", V_global=1, V_local=8, mask_prob=0.15):
+    def __init__(self, split="train", V=8, V_global=1, V_local=8, mask_prob=0.15):
+        self.V = V
         self.V_global = V_global
         self.V_local = V_local
 
@@ -180,6 +186,7 @@ class HFDataset(Dataset):
 
 @hydra.main(version_base=None)
 def main(cfg: DictConfig):
+    device = ""
     if torch.cuda.is_available():
         device = "cuda"
     elif torch.backends.mps.is_available():
@@ -187,6 +194,8 @@ def main(cfg: DictConfig):
     else:
         device = "cpu"
 
+    from omegaconf import OmegaConf
+    OmegaConf.set_struct(cfg, False)
     cfg.device = device
 
     wandb.init(project="LeJEPA embedder", config=dict(cfg))
@@ -195,36 +204,55 @@ def main(cfg: DictConfig):
     train_ds = HFDataset("train", V=cfg.V)
     test_ds = HFDataset("validation", V=1)
     train = DataLoader(
-        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=8
+        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=4
     )
-    test = DataLoader(test_ds, batch_size=256, num_workers=8)
+    test = DataLoader(test_ds, batch_size=256, num_workers=4)
 
     net = Encoder(proj_dim=cfg.proj_dim).to(cfg.device)
-    sigreg = SIGREG().to(cfg.device)
+    sigreg = SIGReg().to(cfg.device)
     g = { "params": net.parameters(), "lr":cfg.lr, "weight_decay": 5e-2}
-    optimiser = torch.optim.AdamW(g)
+    optimiser = torch.optim.AdamW([g])
 
-    warmup_steps = len(train)
-    total_steps =len(train) * cfg.epochs
+    steps_per_epoch = getattr(cfg, "steps_per_epoch", 1000)
+    warmup_steps = steps_per_epoch
+    total_steps = steps_per_epoch * cfg.epochs
 
     s1 = LinearLR(optimiser, start_factor=0.01, total_iters = warmup_steps)
     s2 = CosineAnnealingLR(optimiser, T_max=total_steps - warmup_steps, eta_min=1e-3)
 
     scheduler = SequentialLR(optimiser, schedulers=[s1, s2], milestones=[warmup_steps])
 
-    scaler = GradScalar("cuda", enabled=False)
+    scaler = GradScaler("cuda", enabled=True)
 
     for epoch in range(cfg.epochs):
         net.train()
 
-        for global_views, local_views in tqdm.tqdm(train, total=len(train)):
-            with autocast(dtype=torch.bfloat16):
+        for step, (global_views, local_views) in enumerate(tqdm.tqdm(train, total=steps_per_epoch)):
+            if step >= steps_per_epoch:
+                break
+            
+            if device == "cuda" or device == "mps":
+                with autocast(device_type=device, dtype=torch.bfloat16):
+                    global_views = global_views.to(cfg.device, non_blocking=True).long()
+                    local_views = local_views.to(cfg.device, non_blocking=True).long()
+
+                    _, proj_global = net(global_views)
+                    _, proj_local = net(local_views)
+
+                    proj = torch.cat([proj_global, proj_local], dim=0)
+
+                    inv_loss = (proj.mean(0) - proj).square().mean()
+                    sigreg_loss = sigreg(proj)
+
+                    loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
+            else:
                 global_views = global_views.to(cfg.device, non_blocking=True)
                 local_views = local_views.to(cfg.device, non_blocking=True)
 
-                views = torch.cat([global_views, local_views])
+                _, proj_global = net(global_views)
+                _, proj_local = net(local_views)
 
-                emb, proj = net(views)
+                proj = torch.cat([proj_global, proj_local], dim=0)
 
                 inv_loss = (proj.mean(0) - proj).square().mean()
                 sigreg_loss = sigreg(proj)
@@ -233,7 +261,7 @@ def main(cfg: DictConfig):
 
             optimiser.zero_grad()
             scaler.scale(loss).backward()
-            scaler.step(optmiser)
+            scaler.step(optimiser)
             scaler.update()
             scheduler.step()
 
@@ -242,7 +270,7 @@ def main(cfg: DictConfig):
                     "train/lejepa": loss.item(),
                     "train/sigreg": sigreg_loss.item(),
                     "train/inv": inv_loss.item(),
-                    "train/lr": opt.param_groups[0]["lr"]
+                    "train/lr": optimiser.param_groups[0]["lr"]
                 }
             )
 
