@@ -207,7 +207,7 @@ def main(cfg: DictConfig):
     train_ds = HFDataset("train", V=cfg.V)
     test_ds = HFDataset("validation", V=1)
     train = DataLoader(
-        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=4
+        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=1
     )
     test = DataLoader(test_ds, batch_size=256, num_workers=4)
 
@@ -216,9 +216,12 @@ def main(cfg: DictConfig):
     g = { "params": net.parameters(), "lr":cfg.lr, "weight_decay": 5e-2}
     optimiser = torch.optim.AdamW([g])
 
+    accum_steps = getattr(cfg, "accum_steps", 4)
     steps_per_epoch = getattr(cfg, "steps_per_epoch", 1000)
-    warmup_steps = steps_per_epoch
-    total_steps = steps_per_epoch * cfg.epochs
+    
+    # Adjust scheduler steps since we only step the optimizer every `accum_steps`
+    warmup_steps = max(1, steps_per_epoch // accum_steps)
+    total_steps = warmup_steps * cfg.epochs
 
     s1 = LinearLR(optimiser, start_factor=0.01, total_iters = warmup_steps)
     s2 = CosineAnnealingLR(optimiser, T_max=total_steps - warmup_steps, eta_min=1e-3)
@@ -229,7 +232,7 @@ def main(cfg: DictConfig):
 
     import hydra.utils
     orig_cwd = hydra.utils.get_original_cwd()
-    
+
     start_epoch = 0
     new_checkpoints = glob.glob(os.path.join(orig_cwd, "checkpoint_epoch_*.pt"))
     old_checkpoints = glob.glob(os.path.join(orig_cwd, "roberta_lejepa_epoch_*.pt"))
@@ -253,6 +256,7 @@ def main(cfg: DictConfig):
 
     for epoch in range(start_epoch, cfg.epochs):
         net.train()
+        optimiser.zero_grad()
 
         epoch_sigreg_loss = 0.0
         num_steps = 0
@@ -288,11 +292,16 @@ def main(cfg: DictConfig):
 
                 loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
 
-            optimiser.zero_grad()
+            # Normalize the loss based on accumulation steps
+            loss = loss / accum_steps
             scaler.scale(loss).backward()
-            scaler.step(optimiser)
-            scaler.update()
-            scheduler.step()
+
+            # Update weights only after accumulating enough gradients
+            if (step + 1) % accum_steps == 0 or (step + 1) == steps_per_epoch:
+                scaler.step(optimiser)
+                scaler.update()
+                optimiser.zero_grad()
+                scheduler.step()
 
             epoch_sigreg_loss += sigreg_loss.item()
             num_steps += 1
@@ -307,7 +316,7 @@ def main(cfg: DictConfig):
             )
 
         avg_sigreg = epoch_sigreg_loss / num_steps if num_steps > 0 else 0.0
-        wandb.log({"train/epoch_avg_sigreg": avg_sigreg, "epoch": epoch})
+        wandb.log({"train/epoch_avg_sigreg": avg_sigreg, "epoch": epoch}, commit=False)
 
         checkpoint = {
             'epoch': epoch,
