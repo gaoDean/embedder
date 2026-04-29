@@ -1,7 +1,11 @@
 import torch
 import torch.nn as nn
-from transformers import RobertaConfig, RobertaModel, RobertaTokenizer
-
+from torch.amp import GradScaler
+from torch import autocast
+from torch.utils.data import Dataset
+from datasets import load_dataset
+from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoTokenizer
+import random
 
 config = RobertaConfig.from_pretrained('roberta-base')
 model_scratch = RobertaModel(config)
@@ -88,15 +92,16 @@ class HFDataset(Dataset):
         self.V_global = V_global
         self.V_local = V_local
 
-        self.global_len = 512
-        self.local_len_max = 64 # roughly the size of a long sentence
+        self.global_len = 256
+        self.local_len_max = 48 # roughly the size of a long sentence
         self.mask_prob = mask_prob
 
-        self.ds = load_dataset("JeanKaddour/minipile", split=split)
+        self.ds = load_dataset("ms_marco", "v2.1", split=split)
+        # self.ds = load_dataset("JeanKaddour/minipile", split=split)
 
         self.tokenizer = AutoTokenizer.from_pretrained("roberta-base")
 
-    def _random_crop(self, tokens, target_en):
+    def _random_crop(self, tokens, target_len):
         """Simulates an image 'crop' by taking a random contiguous span of tokens."""
         if len(tokens) <= target_len:
             return tokens
@@ -129,7 +134,14 @@ class HFDataset(Dataset):
         return masked_tokens
 
     def __getitem__(self, i):
-        text = self.ds[i]["text"]
+        row = self.ds[i]
+
+        passages_list = row["passages"]["passage_text"]
+        if len(passages_list) == 0:
+            # Fallback in the extremely rare case of an empty passage list
+            text = row["query"]
+        else:
+            text = random.choice(passages_list)
 
         # Tokenize the full document first (no padding/truncation yet)
         tokens = self.tokenizer(text, add_special_tokens=True, return_tensors="pt")["input_ids"][0]
@@ -166,11 +178,78 @@ class HFDataset(Dataset):
     def __len__(self):
         return len(self.ds)
 
+@hydra.main(version_base=None)
+def main(cfg: DictConfig):
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
+    cfg.device = device
+
+    wandb.init(project="LeJEPA embedder", config=dict(cfg))
+    torch.manual_seed(0)
+
+    train_ds = HFDataset("train", V=cfg.V)
+    test_ds = HFDataset("validation", V=1)
+    train = DataLoader(
+        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=8
+    )
+    test = DataLoader(test_ds, batch_size=256, num_workers=8)
+
+    net = Encoder(proj_dim=cfg.proj_dim).to(cfg.device)
+    sigreg = SIGREG().to(cfg.device)
+    g = { "params": net.parameters(), "lr":cfg.lr, "weight_decay": 5e-2}
+    optimiser = torch.optim.AdamW(g)
+
+    warmup_steps = len(train)
+    total_steps =len(train) * cfg.epochs
+
+    s1 = LinearLR(optimiser, start_factor=0.01, total_iters = warmup_steps)
+    s2 = CosineAnnealingLR(optimiser, T_max=total_steps - warmup_steps, eta_min=1e-3)
+
+    scheduler = SequentialLR(optimiser, schedulers=[s1, s2], milestones=[warmup_steps])
+
+    scaler = GradScalar("cuda", enabled=False)
+
+    for epoch in range(cfg.epochs):
+        net.train()
+
+        for global_views, local_views in tqdm.tqdm(train, total=len(train)):
+            with autocast(dtype=torch.bfloat16):
+                global_views = global_views.to(cfg.device, non_blocking=True)
+                local_views = local_views.to(cfg.device, non_blocking=True)
+
+                views = torch.cat([global_views, local_views])
+
+                emb, proj = net(views)
+
+                inv_loss = (proj.mean(0) - proj).square().mean()
+                sigreg_loss = sigreg(proj)
+
+                loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
+
+            optimiser.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optmiser)
+            scaler.update()
+            scheduler.step()
+
+            wandb.log(
+                {
+                    "train/lejepa": loss.item(),
+                    "train/sigreg": sigreg_loss.item(),
+                    "train/inv": inv_loss.item(),
+                    "train/lr": opt.param_groups[0]["lr"]
+                }
+            )
 
 
-def main():
-    print("Hello from embedder!")
+        torch.save(net.state_dict(), f"roberta_lejepa_epoch_{epoch}.pt")
 
+    wandb.finish()
 
 if __name__ == "__main__":
     main()
