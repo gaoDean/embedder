@@ -5,7 +5,7 @@ from torch import autocast
 from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from datasets import load_dataset
-from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoTokenizer
+from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoTokenizer, AutoModel
 import random
 import hydra
 from omegaconf import DictConfig
@@ -64,14 +64,9 @@ class Encoder(nn.Module):
     def __init__(self, proj_dim=128):
         super().__init__()
 
-        self.backbone = RobertaModel.from_pretrained('distilroberta-base')
-        
-        # DistilRoBERTa has 6 layers. We reinitialize the top 3 layers (50%) 
-        # so it keeps basic language understanding but learns higher-level features from scratch.
-        for layer in self.backbone.encoder.layer[3:]:
-            layer.apply(self.backbone._init_weights)
+        self.backbone = AutoModel.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
 
-        self.proj = MLP(768, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
+        self.proj = MLP(1024, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
 
     # def forward(self, x):
     #     N, V = x.shape[:2]
@@ -84,14 +79,19 @@ class Encoder(nn.Module):
         # flatten N and V to process through roberta
         # shape becomes [N*V, Seq_Len]
         input_ids = input_ids.flatten(0, 1)
+        pad_id = self.tokenizer.pad_token_id if hasattr(self, 'tokenizer') else self.backbone.config.pad_token_id
+        if pad_id is None:
+            pad_id = self.backbone.config.eos_token_id
+            
         if attention_mask is None:
-            pad_id = self.backbone.config.pad_token_id
             attention_mask = (input_ids != pad_id).long()
         else:
             attention_mask = attention_mask.flatten(0, 1)
 
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
-        cls_embed = outputs.pooler_output # shape [N*V, 768]
+        # Last-token pooling
+        sequence_lengths = attention_mask.sum(dim=1) - 1
+        cls_embed = outputs.last_hidden_state[torch.arange(outputs.last_hidden_state.shape[0], device=outputs.last_hidden_state.device), sequence_lengths] # shape [N*V, hidden_dim]
 
         z = self.proj(cls_embed) # shape [N*V, proj_dim]
         z = z.reshape(N, V, -1).transpose(0, 1) # shape [V, N, proj_dim]
@@ -111,21 +111,26 @@ class HFDataset(Dataset):
         self.ds = load_dataset("ms_marco", "v2.1", split=split)
         # self.ds = load_dataset("JeanKaddour/minipile", split=split)
 
-        self.tokenizer = AutoTokenizer.from_pretrained("distilroberta-base")
+        self.tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
+        # Ensure tokenizer has a pad token
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def _random_crop(self, tokens, target_len):
         """Simulates an image 'crop' by taking a random contiguous span of tokens."""
         if len(tokens) <= target_len:
             return tokens
 
-        # Start from index 1 to avoid duplicating an existing [CLS] token,
-        # and leave room to manually add one back
-        start_idx = random.randint(1, len(tokens) - target_len)
-        crop = tokens[start_idx : start_idx + target_len - 1]
+        # Start from index 0 or 1 depending on whether we want to keep a special token
+        # For last-token pooling (Qwen), we shouldn't necessarily force a [CLS] token at start.
+        start_idx = random.randint(0, len(tokens) - target_len)
+        crop = tokens[start_idx : start_idx + target_len]
 
-        # Prepend [CLS] (token ID 0 for RoBERTa)
-        cls_token = torch.tensor([self.tokenizer.cls_token_id], dtype=tokens.dtype)
-        return torch.cat([cls_token, crop])
+        # Add EOS token at the end if we cropped it out, since Qwen models use EOS token for last-token pooling
+        if crop[-1] != self.tokenizer.eos_token_id:
+            crop[-1] = self.tokenizer.eos_token_id
+
+        return crop
 
     def _apply_masking(self, tokens):
         """Simulates 'color jitter/blur' by masking random tokens."""
@@ -134,15 +139,19 @@ class HFDataset(Dataset):
         # Create a probability matrix for masking
         prob_matrix = torch.full(masked_tokens.shape, self.mask_prob)
 
-        # Do not mask special tokens (like [CLS], [SEP], [PAD])
+        # Do not mask special tokens
         special_tokens_mask = [
             1 if t in self.tokenizer.all_special_ids else 0 for t in masked_tokens.tolist()
         ]
         prob_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
 
-        # Sample tokens to mask and replace them with [MASK]
+        # Sample tokens to mask and replace them with a generic masking strategy
+        # since this tokenizer (Qwen based) may not have a dedicated [MASK] token
         masked_indices = torch.bernoulli(prob_matrix).bool()
-        masked_tokens[masked_indices] = self.tokenizer.mask_token_id
+        
+        # If there's no mask_token_id, we can fall back to pad_token_id or random tokens
+        mask_id = self.tokenizer.mask_token_id if self.tokenizer.mask_token_id is not None else self.tokenizer.pad_token_id
+        masked_tokens[masked_indices] = mask_id
         return masked_tokens
 
     def __getitem__(self, i):
@@ -161,6 +170,8 @@ class HFDataset(Dataset):
         global_tokens = self._random_crop(tokens, self.global_len)
 
         # Pad global view to exactly 512 tokens so batches can stack
+        # Qwen handles padding on the left or right, but since we rely on last-token pooling,
+        # we need to be careful with attention masks.
         pad_len = self.global_len - len(global_tokens)
         if pad_len > 0:
             global_tokens = torch.cat([global_tokens, torch.full((pad_len,), self.tokenizer.pad_token_id)])
@@ -212,7 +223,9 @@ def main(cfg: DictConfig):
     
     # Load tokenizer for logging
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained("distilroberta-base")
+    tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
     train = DataLoader(
         train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=0
