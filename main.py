@@ -67,6 +67,11 @@ class Encoder(nn.Module):
         self.backbone = AutoModel.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
 
         self.proj = MLP(1024, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
+        
+        # Cache pad_id to avoid checking on every forward pass
+        self.pad_id = self.backbone.config.pad_token_id
+        if self.pad_id is None:
+            self.pad_id = self.backbone.config.eos_token_id
 
     # def forward(self, x):
     #     N, V = x.shape[:2]
@@ -79,12 +84,9 @@ class Encoder(nn.Module):
         # flatten N and V to process through roberta
         # shape becomes [N*V, Seq_Len]
         input_ids = input_ids.flatten(0, 1)
-        pad_id = self.tokenizer.pad_token_id if hasattr(self, 'tokenizer') else self.backbone.config.pad_token_id
-        if pad_id is None:
-            pad_id = self.backbone.config.eos_token_id
             
         if attention_mask is None:
-            attention_mask = (input_ids != pad_id).long()
+            attention_mask = (input_ids != self.pad_id).long()
         else:
             attention_mask = attention_mask.flatten(0, 1)
 
@@ -228,11 +230,13 @@ def main(cfg: DictConfig):
         tokenizer.pad_token = tokenizer.eos_token
     
     train = DataLoader(
-        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=0
+        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=4, pin_memory=True
     )
-    test = DataLoader(test_ds, batch_size=256, num_workers=4)
+    test = DataLoader(test_ds, batch_size=256, num_workers=4, pin_memory=True)
 
     net = Encoder(proj_dim=cfg.proj_dim).to(cfg.device)
+    if hasattr(torch, "compile"):
+        net = torch.compile(net)
     sigreg = SIGReg().to(cfg.device)
     g = { "params": net.parameters(), "lr":cfg.lr, "weight_decay": 5e-2}
     optimiser = torch.optim.AdamW([g])
@@ -278,7 +282,7 @@ def main(cfg: DictConfig):
 
     for epoch in range(start_epoch, cfg.epochs):
         net.train()
-        optimiser.zero_grad()
+        optimiser.zero_grad(set_to_none=True)
 
         epoch_sigreg_loss = 0.0
         num_steps = 0
@@ -343,7 +347,7 @@ def main(cfg: DictConfig):
                     scaler.update()
                 else:
                     optimiser.step()
-                optimiser.zero_grad()
+                optimiser.zero_grad(set_to_none=True)
                 scheduler.step()
 
             epoch_sigreg_loss += sigreg_loss.item()
