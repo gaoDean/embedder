@@ -64,9 +64,9 @@ class Encoder(nn.Module):
     def __init__(self, proj_dim=128):
         super().__init__()
 
-        self.backbone = AutoModel.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
+        self.backbone = AutoModel.from_pretrained('jinaai/jina-embeddings-v5-text-nano', trust_remote_code=True)
 
-        self.proj = MLP(1024, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
+        self.proj = MLP(768, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
 
         # Cache pad_id to avoid checking on every forward pass
         self.pad_id = getattr(self.backbone.config, 'pad_token_id', None)
@@ -107,11 +107,11 @@ class HFDataset(Dataset):
         self.V_local = V_local
 
         self.global_len = 256
-        self.local_len_max = 48 # roughly the size of a long sentence
+        self.local_len_max = 80 # roughly the size of a long sentence
         self.mask_prob = mask_prob
 
         # Initialize tokenizer once
-        self.tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-nano', trust_remote_code=True)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -237,7 +237,7 @@ def main(cfg: DictConfig):
 
     # Load tokenizer for logging
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-nano', trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -247,7 +247,8 @@ def main(cfg: DictConfig):
     test = DataLoader(test_ds, batch_size=256, num_workers=4, pin_memory=True)
 
     net = Encoder(proj_dim=cfg.proj_dim).to(cfg.device)
-    if hasattr(torch, "compile"):
+    # Disable torch.compile on mps to avoid inductor error
+    if hasattr(torch, "compile") and cfg.device != "mps":
         net = torch.compile(net)
     sigreg = SIGReg().to(cfg.device)
     g = { "params": net.parameters(), "lr":cfg.lr, "weight_decay": 5e-2}
@@ -298,6 +299,10 @@ def main(cfg: DictConfig):
 
         epoch_sigreg_loss = 0.0
         num_steps = 0
+
+        accumulated_proj = []
+        accumulated_inv_loss = 0.0
+
         for step, (global_views, local_views) in enumerate(tqdm.tqdm(train, total=steps_per_epoch)):
             if step >= steps_per_epoch:
                 break
@@ -327,13 +332,10 @@ def main(cfg: DictConfig):
                     inv_loss = (proj_global.mean(0) - proj_local).square().mean()
 
                     proj = torch.cat([proj_global, proj_local], dim=0)
-                    sigreg_loss = sigreg(proj)
 
-                    loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
+                    accumulated_proj.append(proj)
+                    accumulated_inv_loss += inv_loss / accum_steps
 
-                # Normalize the loss based on accumulation steps
-                loss = loss / accum_steps
-                scaler.scale(loss).backward()
             else:
                 global_views = global_views.to(cfg.device, non_blocking=True).contiguous()
                 local_views = local_views.to(cfg.device, non_blocking=True).contiguous()
@@ -344,35 +346,51 @@ def main(cfg: DictConfig):
                 inv_loss = (proj_global.mean(0) - proj_local).square().mean()
 
                 proj = torch.cat([proj_global, proj_local], dim=0)
-                sigreg_loss = sigreg(proj)
 
-                loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
-
-                # Normalize the loss based on accumulation steps
-                loss = loss / accum_steps
-                loss.backward()
+                accumulated_proj.append(proj)
+                accumulated_inv_loss += inv_loss / accum_steps
 
             # Update weights only after accumulating enough gradients
             if (step + 1) % accum_steps == 0 or (step + 1) == steps_per_epoch:
+
+                # Combine accumulated projections
+                full_proj = torch.cat(accumulated_proj, dim=0)
+
                 if device == "cuda" or device == "mps":
+                    with autocast(device_type=device, dtype=torch.bfloat16):
+                        sigreg_loss = sigreg(full_proj)
+                        loss = sigreg_loss * cfg.lam + accumulated_inv_loss * (1 - cfg.lam)
+
+                    scaler.scale(loss).backward()
+
                     scaler.step(optimiser)
                     scaler.update()
                 else:
+                    sigreg_loss = sigreg(full_proj)
+                    loss = sigreg_loss * cfg.lam + accumulated_inv_loss * (1 - cfg.lam)
+                    loss.backward()
+
                     optimiser.step()
+
                 optimiser.zero_grad(set_to_none=True)
                 scheduler.step()
 
-            epoch_sigreg_loss += sigreg_loss.item()
-            num_steps += 1
+                # Reset accumulators
+                accumulated_proj = []
+                accumulated_inv_loss = 0.0
 
-            wandb.log(
-                {
-                    "train/lejepa": loss.item(),
-                    "train/sigreg": sigreg_loss.item(),
-                    "train/inv": inv_loss.item(),
-                    "train/lr": optimiser.param_groups[0]["lr"]
-                }
-            )
+            if 'sigreg_loss' in locals():
+                epoch_sigreg_loss += sigreg_loss.item()
+                num_steps += 1
+
+                wandb.log(
+                    {
+                        "train/lejepa": loss.item(),
+                        "train/sigreg": sigreg_loss.item(),
+                        "train/inv": inv_loss.item(),
+                        "train/lr": optimiser.param_groups[0]["lr"]
+                    }
+                )
 
         avg_sigreg = epoch_sigreg_loss / num_steps if num_steps > 0 else 0.0
         wandb.log({"train/epoch_avg_sigreg": avg_sigreg, "epoch": epoch}, commit=False)
