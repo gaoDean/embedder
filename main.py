@@ -68,8 +68,6 @@ class Encoder(nn.Module):
         config = RobertaConfig.from_pretrained('roberta-base')
         self.backbone = RobertaModel(config)
 
-        self.backbone.gradient_checkpointing_enable()
-
         self.proj = MLP(768, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
 
     # def forward(self, x):
@@ -229,9 +227,12 @@ def main(cfg: DictConfig):
 
     scaler = GradScaler("cuda", enabled=True)
 
+    import hydra.utils
+    orig_cwd = hydra.utils.get_original_cwd()
+    
     start_epoch = 0
-    new_checkpoints = glob.glob("checkpoint_epoch_*.pt")
-    old_checkpoints = glob.glob("roberta_lejepa_epoch_*.pt")
+    new_checkpoints = glob.glob(os.path.join(orig_cwd, "checkpoint_epoch_*.pt"))
+    old_checkpoints = glob.glob(os.path.join(orig_cwd, "roberta_lejepa_epoch_*.pt"))
 
     if new_checkpoints:
         latest_cp = max(new_checkpoints, key=lambda x: int(re.search(r'epoch_(\d+)', x).group(1)))
@@ -315,7 +316,7 @@ def main(cfg: DictConfig):
             'scheduler_state_dict': scheduler.state_dict(),
             'scaler_state_dict': scaler.state_dict()
         }
-        torch.save(checkpoint, f"checkpoint_epoch_{epoch}.pt")
+        torch.save(checkpoint, os.path.join(orig_cwd, f"checkpoint_epoch_{epoch}.pt"))
 
     wandb.finish()
 
