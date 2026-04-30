@@ -40,7 +40,7 @@ class SIGReg(torch.nn.Module):
         return statistic.mean()
 
 class MLP(nn.Module):
-    def __init__(self, in_dim, hidden_dims, norm_layer=nn.BatchNorm1d):
+    def __init__(self, in_dim, hidden_dims, norm_layer=nn.LayerNorm):
         super().__init__()
         layers = []
         last_dim = in_dim
@@ -66,7 +66,7 @@ class Encoder(nn.Module):
 
         self.backbone = AutoModel.from_pretrained('jinaai/jina-embeddings-v5-text-nano', trust_remote_code=True)
 
-        self.proj = MLP(768, [2048, 2048, proj_dim], norm_layer=nn.BatchNorm1d)
+        self.proj = MLP(768, [2048, 2048, proj_dim], norm_layer=nn.LayerNorm)
 
         # Cache pad_id to avoid checking on every forward pass
         self.pad_id = getattr(self.backbone.config, 'pad_token_id', None)
@@ -318,6 +318,7 @@ def main(cfg: DictConfig):
 
         epoch_sigreg_loss = 0.0
         num_steps = 0
+        micro_batches = []
 
         for step, (global_views, local_views) in enumerate(tqdm.tqdm(train, total=steps_per_epoch)):
             if step >= steps_per_epoch:
@@ -337,58 +338,93 @@ def main(cfg: DictConfig):
                     "sample/local_view": wandb.Html(f"<pre>{decoded_local}</pre>"),
                 }, commit=False)
 
-            if device == "cuda" or device == "mps":
-                global_views = global_views.to(cfg.device, non_blocking=True).contiguous()
-                local_views = local_views.to(cfg.device, non_blocking=True).contiguous()
+            micro_batches.append((global_views, local_views))
 
-                with autocast(device_type=device, dtype=torch.bfloat16 if device != "mps" else torch.float32):
-                    _, proj_global = net(global_views)
-                    _, proj_local = net(local_views)
+            is_accum_step = (step + 1) % accum_steps == 0 or (step + 1) == steps_per_epoch
+            if not is_accum_step:
+                continue
 
-                    inv_loss = (proj_global.mean(0) - proj_local).square().mean()
-                    proj = torch.cat([proj_global, proj_local], dim=0)
-                    sigreg_loss = sigreg(proj)
+            # --- 1. Gradient Caching: Forward Pass (No Grad) ---
+            proj_globals_no_grad = []
+            proj_locals_no_grad = []
+            
+            for g_v, l_v in micro_batches:
+                g_v = g_v.to(cfg.device, non_blocking=True).contiguous()
+                l_v = l_v.to(cfg.device, non_blocking=True).contiguous()
+                
+                with torch.no_grad():
+                    with autocast(device_type=device, dtype=torch.bfloat16 if device != "mps" else torch.float32, enabled=(device in ["cuda", "mps"])):
+                        _, p_g = net(g_v)
+                        _, p_l = net(l_v)
+                
+                # Requires grad for the concatenated loss pass
+                p_g.requires_grad = True
+                p_l.requires_grad = True
+                proj_globals_no_grad.append(p_g)
+                proj_locals_no_grad.append(p_l)
 
-                    loss = (sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)) / accum_steps
+            # --- 2. Compute Loss on Full Effective Batch ---
+            # dim=1 is the batch dimension (N) since shape is [V, N, proj_dim]
+            all_proj_global = torch.cat(proj_globals_no_grad, dim=1)
+            all_proj_local = torch.cat(proj_locals_no_grad, dim=1)
+            
+            with autocast(device_type=device, dtype=torch.bfloat16 if device != "mps" else torch.float32, enabled=(device in ["cuda", "mps"])):
+                inv_loss = (all_proj_global.mean(0) - all_proj_local).square().mean()
+                proj_combined = torch.cat([all_proj_global, all_proj_local], dim=0)
+                sigreg_loss = sigreg(proj_combined)
+                
+                # Notice we do NOT divide by accum_steps anymore!
+                # Because the loss is calculated over the entire effective batch simultaneously.
+                loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
 
+            # Backprop to get gradients for the cached embeddings
+            if scaler_enabled:
                 scaler.scale(loss).backward()
             else:
-                global_views = global_views.to(cfg.device, non_blocking=True).contiguous()
-                local_views = local_views.to(cfg.device, non_blocking=True).contiguous()
-
-                _, proj_global = net(global_views)
-                _, proj_local = net(local_views)
-
-                inv_loss = (proj_global.mean(0) - proj_local).square().mean()
-                proj = torch.cat([proj_global, proj_local], dim=0)
-                sigreg_loss = sigreg(proj)
-
-                loss = (sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)) / accum_steps
                 loss.backward()
 
-            # Update weights only after accumulating enough gradients
-            if (step + 1) % accum_steps == 0 or (step + 1) == steps_per_epoch:
-                if device == "cuda" or device == "mps":
-                    scaler.step(optimiser)
-                    scaler.update()
-                else:
-                    optimiser.step()
+            # --- 3. Forward Pass (With Grad) and Backprop into Model ---
+            for i, (g_v, l_v) in enumerate(micro_batches):
+                g_v = g_v.to(cfg.device, non_blocking=True).contiguous()
+                l_v = l_v.to(cfg.device, non_blocking=True).contiguous()
+                
+                with autocast(device_type=device, dtype=torch.bfloat16 if device != "mps" else torch.float32, enabled=(device in ["cuda", "mps"])):
+                    _, p_g = net(g_v)
+                    _, p_l = net(l_v)
+                
+                grad_p_g = proj_globals_no_grad[i].grad
+                grad_p_l = proj_locals_no_grad[i].grad
+                
+                torch.autograd.backward((p_g, p_l), (grad_p_g, grad_p_l))
 
-                optimiser.zero_grad(set_to_none=True)
+            # --- 4. Optimizer Step & Scheduler Sync ---
+            if scaler_enabled:
+                scale = scaler.get_scale()
+                scaler.step(optimiser)
+                scaler.update()
+                skip_lr_sched = (scale > scaler.get_scale())
+            else:
+                optimiser.step()
+                skip_lr_sched = False
+
+            optimiser.zero_grad(set_to_none=True)
+            if not skip_lr_sched:
                 scheduler.step()
 
-            if 'sigreg_loss' in locals():
-                epoch_sigreg_loss += sigreg_loss.item()
-                num_steps += 1
+            # --- 5. Logging & Cleanup ---
+            micro_batches = []
+            
+            epoch_sigreg_loss += sigreg_loss.item()
+            num_steps += 1
 
-                wandb.log(
-                    {
-                        "train/lejepa": loss.item(),
-                        "train/sigreg": sigreg_loss.item(),
-                        "train/inv": inv_loss.item(),
-                        "train/lr": optimiser.param_groups[0]["lr"]
-                    }
-                )
+            wandb.log(
+                {
+                    "train/lejepa": loss.item(),
+                    "train/sigreg": sigreg_loss.item(),
+                    "train/inv": inv_loss.item(),
+                    "train/lr": optimiser.param_groups[0]["lr"]
+                }
+            )
 
         avg_sigreg = epoch_sigreg_loss / num_steps if num_steps > 0 else 0.0
         wandb.log({"train/epoch_avg_sigreg": avg_sigreg, "epoch": epoch}, commit=False)
