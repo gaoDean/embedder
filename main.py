@@ -229,6 +229,7 @@ def main(cfg: DictConfig):
     OmegaConf.set_struct(cfg, False)
     cfg.device = device
 
+    import wandb
     wandb.init(project="LeJEPA embedder", config=dict(cfg))
     torch.manual_seed(0)
 
@@ -247,9 +248,17 @@ def main(cfg: DictConfig):
     test = DataLoader(test_ds, batch_size=256, num_workers=4, pin_memory=True)
 
     net = Encoder(proj_dim=cfg.proj_dim).to(cfg.device)
-    # Disable torch.compile on mps to avoid inductor error
-    if hasattr(torch, "compile") and cfg.device != "mps":
-        net = torch.compile(net)
+    if hasattr(torch, "compile"):
+        # Explicitly compile the model on all supported devices
+        # Ensure a compatible backend is provided. For MPS, `aot_eager` can sometimes work,
+        # but inductor has added experimental MPS support. Using inductor by default unless errors.
+        try:
+            if cfg.device == "mps":
+                net = torch.compile(net, backend="aot_eager")
+            else:
+                net = torch.compile(net)
+        except Exception as e:
+            print(f"Warning: Failed to compile model: {e}")
     sigreg = SIGReg().to(cfg.device)
     g = { "params": net.parameters(), "lr":cfg.lr, "weight_decay": 5e-2}
     optimiser = torch.optim.AdamW([g])
@@ -259,7 +268,7 @@ def main(cfg: DictConfig):
 
     # Adjust scheduler steps since we only step the optimizer every `accum_steps`
     warmup_steps = max(1, steps_per_epoch // accum_steps)
-    total_steps = warmup_steps * cfg.epochs
+    total_steps = max(warmup_steps + 1, warmup_steps * cfg.epochs)
 
     s1 = LinearLR(optimiser, start_factor=0.01, total_iters = warmup_steps)
     s2 = CosineAnnealingLR(optimiser, T_max=total_steps - warmup_steps, eta_min=1e-3)
@@ -325,7 +334,7 @@ def main(cfg: DictConfig):
                 global_views = global_views.to(cfg.device, non_blocking=True).contiguous()
                 local_views = local_views.to(cfg.device, non_blocking=True).contiguous()
 
-                with autocast(device_type=device, dtype=torch.bfloat16):
+                with autocast(device_type=device, dtype=torch.bfloat16 if device != "mps" else torch.float32):
                     _, proj_global = net(global_views)
                     _, proj_local = net(local_views)
 
@@ -384,7 +393,14 @@ def main(cfg: DictConfig):
             'scheduler_state_dict': scheduler.state_dict(),
             'scaler_state_dict': scaler.state_dict()
         }
-        torch.save(checkpoint, os.path.join(orig_cwd, f"checkpoint_epoch_{epoch}.pt"))
+        checkpoint_path = os.path.join(orig_cwd, f"checkpoint_epoch_{epoch}.pt")
+        torch.save(checkpoint, checkpoint_path)
+        
+        # Upload the checkpoint as an artifact to Weights & Biases
+        if wandb.run is not None:
+            artifact = wandb.Artifact(f"model-checkpoint-epoch-{epoch}", type="model")
+            artifact.add_file(checkpoint_path)
+            wandb.log_artifact(artifact)
 
     wandb.finish()
 
