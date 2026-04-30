@@ -64,7 +64,11 @@ class Encoder(nn.Module):
     def __init__(self, proj_dim=128):
         super().__init__()
 
-        self.backbone = AutoModel.from_pretrained('jinaai/jina-embeddings-v5-text-nano', trust_remote_code=True)
+        self.backbone = AutoModel.from_pretrained(
+            'jinaai/jina-embeddings-v5-text-nano', 
+            trust_remote_code=True,
+            attn_implementation="flash_attention_2"
+        )
 
         self.proj = MLP(768, [2048, 2048, proj_dim], norm_layer=nn.LayerNorm)
 
