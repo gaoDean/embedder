@@ -65,7 +65,7 @@ class Encoder(nn.Module):
         super().__init__()
 
         self.backbone = AutoModel.from_pretrained(
-            'jinaai/jina-embeddings-v5-text-nano', 
+            'jinaai/jina-embeddings-v5-text-nano',
             trust_remote_code=True,
             # attn_implementation="flash_attention_2"
         )
@@ -282,7 +282,7 @@ def main(cfg: DictConfig):
     total_steps = max(warmup_steps + 1, warmup_steps * cfg.epochs)
 
     s1 = LinearLR(optimiser, start_factor=0.01, total_iters = warmup_steps)
-    s2 = CosineAnnealingLR(optimiser, T_max=total_steps - warmup_steps, eta_min=1e-3)
+    s2 = CosineAnnealingLR(optimiser, T_max=total_steps - warmup_steps, eta_min=5e-4)
 
     scheduler = SequentialLR(optimiser, schedulers=[s1, s2], milestones=[warmup_steps])
 
@@ -351,16 +351,16 @@ def main(cfg: DictConfig):
             # --- 1. Gradient Caching: Forward Pass (No Grad) ---
             proj_globals_no_grad = []
             proj_locals_no_grad = []
-            
+
             for g_v, l_v in micro_batches:
                 g_v = g_v.to(cfg.device, non_blocking=True).contiguous()
                 l_v = l_v.to(cfg.device, non_blocking=True).contiguous()
-                
+
                 with torch.no_grad():
                     with autocast(device_type=device, dtype=torch.bfloat16 if device != "mps" else torch.float32, enabled=(device in ["cuda", "mps"])):
                         _, p_g = net(g_v)
                         _, p_l = net(l_v)
-                
+
                 # Requires grad for the concatenated loss pass
                 p_g.requires_grad = True
                 p_l.requires_grad = True
@@ -371,12 +371,12 @@ def main(cfg: DictConfig):
             # dim=1 is the batch dimension (N) since shape is [V, N, proj_dim]
             all_proj_global = torch.cat(proj_globals_no_grad, dim=1)
             all_proj_local = torch.cat(proj_locals_no_grad, dim=1)
-            
+
             with autocast(device_type=device, dtype=torch.bfloat16 if device != "mps" else torch.float32, enabled=(device in ["cuda", "mps"])):
                 inv_loss = (all_proj_global.mean(0) - all_proj_local).square().mean()
                 proj_combined = torch.cat([all_proj_global, all_proj_local], dim=0)
                 sigreg_loss = sigreg(proj_combined)
-                
+
                 # Notice we do NOT divide by accum_steps anymore!
                 # Because the loss is calculated over the entire effective batch simultaneously.
                 loss = sigreg_loss * cfg.lam + inv_loss * (1 - cfg.lam)
@@ -391,14 +391,14 @@ def main(cfg: DictConfig):
             for i, (g_v, l_v) in enumerate(micro_batches):
                 g_v = g_v.to(cfg.device, non_blocking=True).contiguous()
                 l_v = l_v.to(cfg.device, non_blocking=True).contiguous()
-                
+
                 with autocast(device_type=device, dtype=torch.bfloat16 if device != "mps" else torch.float32, enabled=(device in ["cuda", "mps"])):
                     _, p_g = net(g_v)
                     _, p_l = net(l_v)
-                
+
                 grad_p_g = proj_globals_no_grad[i].grad
                 grad_p_l = proj_locals_no_grad[i].grad
-                
+
                 torch.autograd.backward((p_g, p_l), (grad_p_g, grad_p_l))
 
             # --- 4. Optimizer Step & Scheduler Sync ---
@@ -417,7 +417,7 @@ def main(cfg: DictConfig):
 
             # --- 5. Logging & Cleanup ---
             micro_batches = []
-            
+
             epoch_sigreg_loss += sigreg_loss.item()
             num_steps += 1
 
@@ -442,7 +442,7 @@ def main(cfg: DictConfig):
         }
         checkpoint_path = os.path.join(orig_cwd, f"checkpoint_epoch_{epoch}.pt")
         torch.save(checkpoint, checkpoint_path)
-        
+
         # Upload the checkpoint as an artifact to Weights & Biases
         if wandb.run is not None:
             artifact = wandb.Artifact(f"model-checkpoint-epoch-{epoch}", type="model")
