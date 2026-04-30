@@ -151,30 +151,45 @@ class HFDataset(Dataset):
 
         # Add EOS token at the end if we cropped it out, since Qwen models use EOS token for last-token pooling
         if crop[-1] != self.tokenizer.eos_token_id:
-            crop[-1] = self.tokenizer.eos_token_id
+            crop = torch.cat([crop[:-1], torch.tensor([self.tokenizer.eos_token_id], dtype=crop.dtype, device=crop.device)])
 
         return crop
 
     def _apply_masking(self, tokens):
-        """Simulates 'color jitter/blur' by masking random tokens."""
+        """Simulates 'color jitter/blur' by masking contiguous spans of tokens."""
         masked_tokens = tokens.clone()
 
-        # Create a probability matrix for masking
-        prob_matrix = torch.full(masked_tokens.shape, self.mask_prob)
-
         # Do not mask special tokens
-        special_tokens_mask = [
+        special_tokens_mask = torch.tensor([
             1 if t in self.tokenizer.all_special_ids else 0 for t in masked_tokens.tolist()
-        ]
-        prob_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
+        ], dtype=torch.bool)
 
-        # Sample tokens to mask and replace them with a generic masking strategy
-        # since this tokenizer (Qwen based) may not have a dedicated [MASK] token
-        masked_indices = torch.bernoulli(prob_matrix).bool()
+        num_tokens = len(tokens)
+        num_to_mask = int(num_tokens * self.mask_prob)
 
-        # If there's no mask_token_id, we can fall back to pad_token_id or random tokens
+        if num_to_mask <= 0:
+            return masked_tokens
+
+        mask_indices = torch.zeros(num_tokens, dtype=torch.bool)
+        masked_count = 0
+        attempts = 0
+
+        # Try to mask spans of length 3 until we reach the target mask percentage
+        span_length = 3
+        while masked_count < num_to_mask and attempts < 100:
+            attempts += 1
+            start_idx = random.randint(0, max(0, num_tokens - span_length))
+            end_idx = min(num_tokens, start_idx + span_length)
+
+            # Avoid overlapping masks and special tokens
+            if mask_indices[start_idx:end_idx].any() or special_tokens_mask[start_idx:end_idx].any():
+                continue
+
+            mask_indices[start_idx:end_idx] = True
+            masked_count += (end_idx - start_idx)
+
         mask_id = self.tokenizer.mask_token_id if self.tokenizer.mask_token_id is not None else self.tokenizer.pad_token_id
-        masked_tokens[masked_indices] = mask_id
+        masked_tokens[mask_indices] = mask_id
         return masked_tokens
 
     def __getitem__(self, i):
@@ -194,14 +209,11 @@ class HFDataset(Dataset):
 
         local_views = []
         for _ in range(self.V_local):
-            # Pick a random "sentence" length (e.g., between 16 and 64 tokens)
-            local_crop_len = random.randint(16, self.local_len_max)
+            # Pick a random "sentence" length
+            local_crop_len = random.randint(50, self.local_len_max)
 
             # Crop a small segment from the original document
             local_tokens = self._random_crop(tokens, local_crop_len)
-
-            # Apply Masking (Corruption)
-            local_tokens = self._apply_masking(local_tokens)
 
             # Pad local view to local_len_max (64) so local views can stack uniformly
             pad_len_local = self.local_len_max - len(local_tokens)
