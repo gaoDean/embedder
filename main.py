@@ -106,8 +106,8 @@ class HFDataset(Dataset):
         self.V_global = V_global
         self.V_local = V_local
 
-        self.global_len = 256
-        self.local_len_max = 80 # roughly the size of a long sentence
+        self.global_len = 1024
+        self.local_len_max = 256 # roughly the size of a long sentence
         self.mask_prob = mask_prob
 
         # Initialize tokenizer once
@@ -116,18 +116,13 @@ class HFDataset(Dataset):
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # Load and Pre-tokenize the dataset using Arrow/Map
-        ds = load_dataset("ms_marco", "v2.1", split=split)
+        ds = load_dataset("abisee/cnn_dailymail", "3.0.0", split=split)
 
         def tokenize_function(examples):
             # MS Marco has lists of passages, we can just join them or pick the first for the map
             # For exact parity with your random.choice, you can flatten or just pre-tokenize the queries/passages
             # Here we tokenize the query as a fallback, and the first passage (or join them)
-            texts = []
-            for q, p in zip(examples["query"], examples["passages"]):
-                if len(p["passage_text"]) > 0:
-                    texts.append(p["passage_text"][0])
-                else:
-                    texts.append(q)
+            texts = examples["article"]
             return self.tokenizer(texts, add_special_tokens=True, truncation=False)
 
         # map caches to disk, runs heavily parallelized in C++ (Rust in fast tokenizers)
@@ -198,7 +193,7 @@ class HFDataset(Dataset):
 
         global_tokens = self._random_crop(tokens, self.global_len)
 
-        # Pad global view to exactly 512 tokens so batches can stack
+        # Pad global view to exactly 1024 tokens so batches can stack
         # Qwen handles padding on the left or right, but since we rely on last-token pooling,
         # we need to be careful with attention masks.
         pad_len = self.global_len - len(global_tokens)
