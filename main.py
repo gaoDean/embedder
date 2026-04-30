@@ -278,13 +278,17 @@ def main(cfg: DictConfig):
     steps_per_epoch = getattr(cfg, "steps_per_epoch", 1000)
 
     # Adjust scheduler steps since we only step the optimizer every `accum_steps`
-    warmup_steps = max(1, steps_per_epoch // accum_steps)
-    total_steps = max(warmup_steps + 1, warmup_steps * cfg.epochs)
+    steps_per_epoch_effective = steps_per_epoch // accum_steps
+    total_steps = steps_per_epoch_effective * cfg.epochs
+    warmup_steps = max(1, int(steps_per_epoch_effective * 0.5))
+    cosine_steps = max(1, (total_steps // 2) - warmup_steps)
 
     s1 = LinearLR(optimiser, start_factor=0.01, total_iters = warmup_steps)
-    s2 = CosineAnnealingLR(optimiser, T_max=total_steps - warmup_steps, eta_min=5e-4)
+    s2 = CosineAnnealingLR(optimiser, T_max=cosine_steps, eta_min=5e-4)
+    # Maintain eta_min for the remaining steps after cosine annealing finishes
+    s3 = LinearLR(optimiser, start_factor=1.0, total_iters=total_steps - warmup_steps - cosine_steps)
 
-    scheduler = SequentialLR(optimiser, schedulers=[s1, s2], milestones=[warmup_steps])
+    scheduler = SequentialLR(optimiser, schedulers=[s1, s2, s3], milestones=[warmup_steps, warmup_steps + cosine_steps])
 
     # Only enable scaler if using CUDA and float16 (though you are using bfloat16,
     # we'll keep it conditionally enabled for CUDA just in case)
