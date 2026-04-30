@@ -242,7 +242,7 @@ def main(cfg: DictConfig):
         tokenizer.pad_token = tokenizer.eos_token
 
     train = DataLoader(
-        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=4, pin_memory=True
+        train_ds, batch_size=cfg.bs, shuffle=True, drop_last=True, num_workers=8, pin_memory=True
     )
     test = DataLoader(test_ds, batch_size=256, num_workers=4, pin_memory=True)
 
