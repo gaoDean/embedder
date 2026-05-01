@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.amp import GradScaler
 from torch import autocast
 from torch.utils.data import Dataset, DataLoader
-from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR, ConstantLR
 from datasets import load_dataset
 from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoTokenizer, AutoModel
 import random
@@ -286,7 +286,7 @@ def main(cfg: DictConfig):
     s1 = LinearLR(optimiser, start_factor=0.01, total_iters = warmup_steps)
     s2 = CosineAnnealingLR(optimiser, T_max=cosine_steps, eta_min=5e-4)
     # Maintain eta_min for the remaining steps after cosine annealing finishes
-    s3 = LinearLR(optimiser, start_factor=1.0, total_iters=total_steps - warmup_steps - cosine_steps)
+    s3 = ConstantLR(optimiser, factor=5e-4/cfg.lr, total_iters=total_steps - warmup_steps - cosine_steps)
 
     scheduler = SequentialLR(optimiser, schedulers=[s1, s2, s3], milestones=[warmup_steps, warmup_steps + cosine_steps])
 
