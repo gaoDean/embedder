@@ -307,9 +307,8 @@ def main(cfg: DictConfig):
         print(f"Resuming from full checkpoint: {latest_cp}")
         checkpoint = torch.load(latest_cp, map_location=cfg.device)
         net.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        # Intentionally NOT loading optimizer and scheduler to start with a fresh learning rate
-        # optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
-        # scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
     elif old_checkpoints:
