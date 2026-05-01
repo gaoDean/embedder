@@ -110,7 +110,7 @@ class HFDataset(Dataset):
         self.V_global = V_global
         self.V_local = V_local
 
-        self.global_len = 1024
+        self.global_len = 512
         self.local_len_max = 256 # roughly the size of a long sentence
         self.mask_prob = mask_prob
 
@@ -209,12 +209,12 @@ class HFDataset(Dataset):
         local_views = []
         for _ in range(self.V_local):
             # Pick a random "sentence" length
-            local_crop_len = random.randint(50, self.local_len_max)
+            local_crop_len = random.randint(128, self.local_len_max)
 
             # Crop a small segment from the original document
             local_tokens = self._random_crop(tokens, local_crop_len)
 
-            # Pad local view to local_len_max (64) so local views can stack uniformly
+            # Pad local view to local_len_max so local views can stack uniformly
             pad_len_local = self.local_len_max - len(local_tokens)
             if pad_len_local > 0:
                 local_tokens = torch.cat([local_tokens, torch.full((pad_len_local,), self.tokenizer.pad_token_id)])
