@@ -51,9 +51,9 @@ class Encoder(nn.Module):
         sequence_lengths = attention_mask.sum(dim=1) - 1
         cls_embed = outputs.last_hidden_state[t.arange(outputs.last_hidden_state.shape[0], device=outputs.last_hidden_state.device), sequence_lengths] # shape [N*V, hidden_dim]
 
-        return cls_embed
+        decoded = [self.tokenizer.decode([token_id]) for token_id in input_ids[0]]
 
-
+        return cls_embed, decoded
 
 def cosine_sim(e1, e2):
     return t.dot(e1.flatten(), e2.flatten()) / (t.norm(e1) * t.norm(e2))
@@ -65,6 +65,9 @@ checkpoint = t.load(
     weights_only=True,
 )
 
+t.manual_seed(123)
+np.random.seed(123)
+
 model = Encoder().to("mps")
 
 state_dict = checkpoint.get('model_state_dict', checkpoint)
@@ -72,13 +75,11 @@ state_dict = checkpoint.get('model_state_dict', checkpoint)
 # Capture the output to monitor strict=False behavior
 missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
 
-if missing_keys or unexpected_keys:
-    print("Missing keys:", missing_keys)
-    print("Unexpected keys:", unexpected_keys)
+# if missing_keys or unexpected_keys:
+#     print("Missing keys:", missing_keys)
+#     print("Unexpected keys:", unexpected_keys)
 
 model.eval()
-
-text = ["a person with a crown"]
 
 captured_gradients = []
 def capture_grad_hook(module, grad_input, grad_output):
@@ -86,7 +87,7 @@ def capture_grad_hook(module, grad_input, grad_output):
 
 captured_forward = []
 def capture_forward_hook(module, forward_input, forward_output):
-    captured_forward.append(forward_input[0].clone().detach())
+    captured_forward.append(forward_output[0].clone().detach())
 
 embedding_layer = model.backbone.get_input_embeddings()
 embedding_layer.weight.requires_grad_(True)
@@ -97,10 +98,10 @@ forward_hook_handle = embedding_layer.register_forward_hook(capture_forward_hook
 
 print(model)
 
-model.zero_grad()
-res1 = model(["queen"])
-model.zero_grad()
-res2 = model(["queen without a crown"])
+text = ["there is an extremely large similarity between these tokens", "these tokens are not quite similar"]
+
+res1 = model([text[0]])
+res2, res2_tokenized = model([text[1]])
 
 print(res2)
 
@@ -110,7 +111,8 @@ print(res2)
 
 # loss = ((res1[0] - res2[0]) ** 2).sum()
 
-loss = cosine_sim(res1[0], res2[0]) ** 2
+loss = t.norm(res1[0] - res2[0])
+# loss = cosine_sim(res1[0],res2[0])
 
 print(loss)
 
@@ -125,4 +127,22 @@ print(captured_gradients[0][0])
 
 token_contributions = t.norm(captured_gradients[0][0], dim=1)
 
-print(token_contributions)
+token_importance = token_contributions ** 2
+token_importance /= sum(token_importance)
+token_importance *= 100
+
+# remove pooling token (unneeded)
+token_importance = token_importance[:len(token_importance) - 1]
+res2_tokenized = res2_tokenized[:len(res2_tokenized) - 1]
+
+
+print(f"ORIGINAL:       {text[0]}")
+print(f"TOKEN:          ", end='')
+for token in res2_tokenized:
+    print(f"{token.strip():<8}", end='')
+print()
+
+print(f"IMPORTANCE (%): ", end='')
+for grad in token_importance:
+    print(f"{grad:<8.2f}", end='')
+print()
