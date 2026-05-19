@@ -41,19 +41,19 @@ class NeutralCrossAttention(nn.Module):
         # Residual connection
         return hidden_states + self.out_proj(out)
 
-class ModifiedPythiaBlock(nn.Module):
-    def __init__(self, original_block, hidden_size, embed_dim):
+class AttentionWithCrossAttn(nn.Module):
+    def __init__(self, original_attn, hidden_size, embed_dim):
         super().__init__()
-        self.original_block = original_block
+        self.original_attn = original_attn
         self.cross_attn = NeutralCrossAttention(hidden_size, embed_dim)
         self.target_embedding = None # Stored temporarily during forward pass
 
     def forward(self, *args, **kwargs):
-        # Pythia block forward
-        outputs = self.original_block(*args, **kwargs)
+        # Original self-attention forward
+        outputs = self.original_attn(*args, **kwargs)
         hidden_states = outputs[0]
         
-        # Apply cross-attention if target embedding is provided
+        # Apply cross-attention sequentially after self-attention
         if self.target_embedding is not None:
             hidden_states = self.cross_attn(hidden_states, self.target_embedding)
             
@@ -62,14 +62,15 @@ class ModifiedPythiaBlock(nn.Module):
 def modify_pythia(model, embed_dim=768):
     hidden_size = model.config.hidden_size
     for i, layer in enumerate(model.gpt_neox.layers):
-        model.gpt_neox.layers[i] = ModifiedPythiaBlock(layer, hidden_size, embed_dim)
+        # Wrap only the self-attention mechanism, leaving MLP and residual logic intact
+        layer.attention = AttentionWithCrossAttn(layer.attention, hidden_size, embed_dim)
     return model
 
 def set_target_embedding(model, target_embedding):
     """Sets the target embedding for all cross-attention layers."""
     for layer in model.gpt_neox.layers:
-        if isinstance(layer, ModifiedPythiaBlock):
-            layer.target_embedding = target_embedding.unsqueeze(1) # [B, 1, embed_dim]
+        if isinstance(layer.attention, AttentionWithCrossAttn):
+            layer.attention.target_embedding = target_embedding.unsqueeze(1) # [B, 1, embed_dim]
 
 # --- 2. Jina Evaluator & Hooks ---
 class JinaEvaluator:
@@ -79,9 +80,16 @@ class JinaEvaluator:
         self.model.eval()
         self.device = device
         
+        # Freeze Jina model to save memory
+        for param in self.model.parameters():
+            param.requires_grad = False
+            
         # Setup hooks to capture gradients on inputs
         self.captured_gradients = None
         embedding_layer = self.model.get_input_embeddings()
+        
+        # Explicitly unfreeze the embedding layer so it can receive gradients
+        embedding_layer.weight.requires_grad_(True)
         
         def capture_grad_hook(module, grad_input, grad_output):
             self.captured_gradients = grad_output[0].clone().detach()
@@ -167,26 +175,25 @@ def build_thesaurus(tokenizer, model, device):
     return embeddings
 
 def smooth_costs(costs, input_ids, thesaurus_embeddings, pythia_vocab_size):
-    """Distributes costs to similar words in the vocabulary."""
-    B, seq_len = costs.shape
-    # Initialize full vocab costs with zeros
-    smoothed_costs = torch.zeros(B, seq_len, pythia_vocab_size, device=costs.device)
+    """Distributes costs to similar words in the vocabulary (Vectorized)."""
+    # input_ids: [B, SeqLen]
+    # costs: [B, SeqLen]
+    # thesaurus_embeddings: [VocabSize, Hidden]
     
-    # Simple smoothing: calculate similarity of generated token to all vocab tokens
-    # and distribute cost proportionally.
-    for b in range(B):
-        for s in range(seq_len):
-            token_id = input_ids[b, s]
-            base_cost = costs[b, s]
-            
-            # Get similarity of this token to all others
-            token_emb = thesaurus_embeddings[token_id].unsqueeze(0)
-            sims = torch.matmul(token_emb, thesaurus_embeddings.T).squeeze(0) # [VocabSize]
-            sims = F.relu(sims) ** 2 # Only positive similarities, sharpened
-            
-            # Apply cost based on similarity
-            smoothed_costs[b, s] = base_cost * sims
-            
+    # 1. Fetch embeddings for the generated tokens: [B, SeqLen, Hidden]
+    token_embs = thesaurus_embeddings[input_ids]
+    
+    # 2. Compute similarity against the entire vocabulary
+    # [B, SeqLen, Hidden] @ [Hidden, VocabSize] -> [B, SeqLen, VocabSize]
+    sims = torch.matmul(token_embs, thesaurus_embeddings.T)
+    
+    # 3. Apply ReLU and square to sharpen similarities
+    sims = F.relu(sims) ** 2
+    
+    # 4. Multiply by base costs
+    # costs.unsqueeze(-1) expands to [B, SeqLen, 1] for broadcasting
+    smoothed_costs = costs.unsqueeze(-1) * sims
+    
     return smoothed_costs
 
 # --- 4. Main Training Loop ---
@@ -295,7 +302,7 @@ def main(args):
                 logits = outputs.logits[:, :-1, :] # Shift for next token prediction
                 labels = padded_clean_ids[:, 1:]
                 
-                # Ignore padding in cross entropy
+                # Apply standard cross entropy
                 ce_loss = F.cross_entropy(
                     logits.reshape(-1, logits.size(-1)), 
                     labels.reshape(-1), 
@@ -304,10 +311,27 @@ def main(args):
                 )
                 ce_loss = ce_loss.view(args.batch_size, -1) # [B, SeqLen]
                 
-                target_costs = smoothed_costs[:, 1:, :] 
-                gathered_costs = torch.gather(target_costs, 2, labels.unsqueeze(-1)).squeeze(-1) 
+                # Align smoothed_costs (shift by 1 to match next-token prediction)
+                target_costs = smoothed_costs[:, 1:, :] # [B, SeqLen, VocabSize]
                 
-                final_loss = (args.lm_weight * ce_loss) + (args.semantic_weight * gathered_costs * ce_loss)
+                # To apply the thesaurus costs, we compute a custom cross-entropy-like loss
+                # where the logits are evaluated against the smoothed cost distribution.
+                # Since we want to reward/penalize based on the smoothed costs, we use KL Divergence.
+                # We normalize target_costs to be a valid probability distribution over the vocab.
+                
+                # Convert costs into a target probability distribution (lower cost = higher probability target)
+                # First, ensure costs are positive
+                costs_shifted = target_costs - target_costs.min(dim=-1, keepdim=True)[0]
+                # Invert: max cost becomes 0, 0 cost becomes max
+                inverted_costs = costs_shifted.max(dim=-1, keepdim=True)[0] - costs_shifted
+                # Normalize to sum to 1
+                target_probs = inverted_costs / (inverted_costs.sum(dim=-1, keepdim=True) + 1e-8)
+                
+                # Compute KL divergence between Pythia logits and the smoothed target distribution
+                log_probs = F.log_softmax(logits, dim=-1)
+                semantic_loss = F.kl_div(log_probs, target_probs, reduction='none').sum(dim=-1) # [B, SeqLen]
+                
+                final_loss = (args.lm_weight * ce_loss) + (args.semantic_weight * semantic_loss)
                 
                 # Mask out padding from final loss
                 mask = (labels != pythia_tokenizer.pad_token_id).float()
@@ -324,7 +348,7 @@ def main(args):
             wandb.log({
                 "train/loss": final_loss.item(),
                 "train/ce_loss_mean": ce_loss.mean().item(),
-                "train/cost_mean": gathered_costs.mean().item(),
+                "train/semantic_loss_mean": semantic_loss.mean().item(),
                 "epoch": epoch,
                 "step": step + (epoch * args.steps_per_epoch)
             })
