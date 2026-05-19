@@ -125,54 +125,65 @@ class JinaEvaluator:
         return costs, tokens.input_ids
 
 # --- 3. Token Alignment & Thesaurus Smoothing ---
-def align_token_costs(text, jina_costs, pythia_tokenizer, jina_tokenizer, device):
+def align_token_costs(text, jina_costs_1d, pythia_tokenizer, jina_tokenizer, device):
     """
     Maps costs from Jina tokens to Pythia tokens using character offsets.
+    Optimized O(N+M) two-pointer approach, avoiding host-to-device transfers in inner loops.
     """
-    # Tokenize with offsets
+    # Tokenize Pythia without special tokens to match causal LM sequence
     p_enc = pythia_tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
-    j_enc = jina_tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
+    
+    # Tokenize Jina WITH special tokens so j_idx aligns perfectly with the Jina model's output
+    j_enc = jina_tokenizer(text, return_offsets_mapping=True, add_special_tokens=True)
     
     p_offsets = p_enc['offset_mapping']
     j_offsets = j_enc['offset_mapping']
     
-    # We strip the batch dimension for jina_costs in this loop, assuming batch_size=1 for now
-    j_costs_flat = jina_costs[0] 
+    # Move costs to CPU once to avoid .item() syncs in the loop. 
+    # jina_costs_1d is expected to be a 1D tensor for a single sequence.
+    j_costs_flat = jina_costs_1d.view(-1).tolist() 
     
     aligned_costs = []
     
+    j = 0
+    j_len = len(j_offsets)
+    last_valid_cost = 0.0 # Fallback for unmapped tokens
+    
     for p_start, p_end in p_offsets:
-        if p_start == p_end: # Special tokens might have (0,0)
-            aligned_costs.append(0.0)
+        if p_start == p_end: 
+            aligned_costs.append(last_valid_cost)
             continue
             
         overlapping_costs = []
-        for j_idx, (j_start, j_end) in enumerate(j_offsets):
-            if j_start == j_end:
-                continue
-            # Check for overlap between (p_start, p_end) and (j_start, j_end)
-            if max(p_start, j_start) < min(p_end, j_end):
-                # Ensure we don't go out of bounds (Jina might have added special tokens)
-                if j_idx < len(j_costs_flat):
-                    overlapping_costs.append(j_costs_flat[j_idx].item())
         
-        # Average the costs of overlapping Jina tokens
-        if overlapping_costs:
-            aligned_costs.append(sum(overlapping_costs) / len(overlapping_costs))
-        else:
-            aligned_costs.append(0.0) # Fallback
+        # Advance Jina pointer to the first potentially overlapping token
+        while j < j_len and j_offsets[j][1] < p_start:
+            j += 1
             
-    # Convert to tensor, add batch dimension back
-    # Note: p_enc['input_ids'] length might differ slightly from the original generated sequence 
-    # due to special tokens, so we handle that in the main loop.
+        # Temporarily search forward in Jina tokens for overlaps
+        temp_j = j
+        while temp_j < j_len and j_offsets[temp_j][0] <= p_end:
+            j_start, j_end = j_offsets[temp_j]
+            # Handle standard overlapping text tokens
+            if j_start != j_end and max(p_start, j_start) < min(p_end, j_end):
+                if temp_j < len(j_costs_flat):
+                    overlapping_costs.append(j_costs_flat[temp_j])
+            # Explicitly capture special tokens (like [CLS]) if they sit exactly at the boundary
+            elif j_start == j_end and (j_start == p_start or j_start == p_end):
+                 if temp_j < len(j_costs_flat):
+                     overlapping_costs.append(j_costs_flat[temp_j])
+            temp_j += 1
+        
+        if overlapping_costs:
+            # Pure python math, no GPU sync
+            avg_cost = sum(overlapping_costs) / len(overlapping_costs)
+            aligned_costs.append(avg_cost)
+            last_valid_cost = avg_cost
+        else:
+            # Fall back to the last valid cost to prevent anomalous spikes
+            aligned_costs.append(last_valid_cost)
+            
     return torch.tensor(aligned_costs, device=device).unsqueeze(0), p_enc['input_ids']
-
-def build_thesaurus(tokenizer, model, device):
-    """Pre-computes similarity between vocabulary tokens using model's input embeddings."""
-    embeddings = model.get_input_embeddings().weight.detach() # [VocabSize, Hidden]
-    # Normalize for cosine similarity
-    embeddings = F.normalize(embeddings, p=2, dim=1)
-    return embeddings
 
 def smooth_costs(costs, input_ids, thesaurus_embeddings, pythia_vocab_size):
     """Distributes costs to similar words in the vocabulary (Vectorized)."""
@@ -212,8 +223,9 @@ def main(args):
     print("Loading Jina...")
     jina_eval = JinaEvaluator(device)
     
-    # Thesaurus for semantic smoothing
-    thesaurus = build_thesaurus(pythia_tokenizer, pythia_model, device)
+    print("Loading Precomputed Data...")
+    thesaurus = torch.load(os.path.join(args.precomputed_dir, "thesaurus.pt")).to(device)
+    # dataset = torch.load(os.path.join(args.precomputed_dir, "tokenized_dataset.pt")) # Loaded when connecting real dataloader
     
     optimizer = torch.optim.AdamW(pythia_model.parameters(), lr=args.lr)
     
@@ -274,8 +286,9 @@ def main(args):
             clean_pythia_ids_list = []
             
             for b in range(args.batch_size):
+                # Pass a 1D tensor representing the costs for just this sequence
                 a_cost, c_ids = align_token_costs(
-                    generated_texts[b], costs[b:b+1], pythia_tokenizer, jina_eval.tokenizer, device
+                    generated_texts[b], costs[b], pythia_tokenizer, jina_eval.tokenizer, device
                 )
                 aligned_costs_list.append(a_cost.squeeze(0)) # [SeqLen]
                 clean_pythia_ids_list.append(c_ids) # List of token lists
@@ -377,6 +390,7 @@ if __name__ == "__main__":
     parser.add_argument("--lm_weight", type=float, default=0.5, help="Weight for language modeling loss")
     parser.add_argument("--semantic_weight", type=float, default=1.0, help="Weight for semantic/Jina loss")
     parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Directory to save checkpoints")
+    parser.add_argument("--precomputed_dir", type=str, default="./precomputed_data", help="Directory containing precomputed tensors")
     
     args = parser.parse_args()
     main(args)
