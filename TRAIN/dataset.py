@@ -96,9 +96,9 @@ def collate_fn(batch, pad_id=0):
         padded_y[i, :len(y)] = y
     return padded_x, padded_y
 
-def get_dataloader(tokenizer, split):
+def get_dataloader(tokenizer, split, shuffle=True):
     dataset = HFDataset(tokenizer, split)
     return DataLoader(
-        dataset, batch_size=config.DATALOADER_BATCHSIZE, shuffle=True,
+        dataset, batch_size=config.DATALOADER_BATCHSIZE, shuffle=shuffle,
         collate_fn=collate_fn, num_workers=0, pin_memory=True,
     )
