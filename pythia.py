@@ -105,11 +105,22 @@ if __name__ == "__main__":
     tokenizer, model = load_model()
     print("Model modified for hybrid inference with zero-init cross-attention!")
     
-    batch_size = 1
-    vec = torch.randn(batch_size, 768).to(model.dtype)
-    text = "The story begins with"
-    inputs = tokenizer(text, return_tensors="pt")
+    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    model.to(device)
     
+    # Test coherence
+    prompt = "Once upon a time,"
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    
+    print(f"\nPrompt: {prompt}")
+    
+    # 1. Generate without context_vector
     with torch.no_grad():
-        outputs = model(**inputs, context_vector=vec)
-    print(f"Verification logits shape: {outputs.logits.shape}")
+        out_none = model.generate(**inputs, max_new_tokens=20, do_sample=True, temperature=0.7)
+    print(f"Generated (no context): {tokenizer.decode(out_none[0], skip_special_tokens=True)}")
+    
+    # 2. Generate with random context_vector
+    vec = torch.randn(1, 768).to(device=device, dtype=model.dtype)
+    with torch.no_grad():
+        out_vec = model.generate(**inputs, max_new_tokens=20, do_sample=True, temperature=0.7, context_vector=vec)
+    print(f"Generated (with context): {tokenizer.decode(out_vec[0], skip_special_tokens=True)}")
