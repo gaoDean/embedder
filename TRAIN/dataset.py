@@ -34,7 +34,7 @@ class HFDataset(Dataset):
 
                 for i, entry in enumerate(texts):
                     # e.g NEW YORK (CNN) -- A massive anti-Ma...
-                    res = re.findall("^.*\s--\s", entry)
+                    res = re.findall(r"^.*\s--\s", entry)
 
                     # remove the news handle metadata
                     if res != []:
@@ -44,7 +44,7 @@ class HFDataset(Dataset):
                     texts[i] = texts[i][:config.DATASET_ENTRY_LENGTH_LETTERS]
 
                     # remove any unfinished words due to length trimming
-                    texts[i] = re.sub("\s\S*$", "", texts[i])
+                    texts[i] = re.sub(r"\s\S*$", "", texts[i])
 
                 tokenized = self.llm_tokenizer(texts, add_special_tokens=True, truncation=False)
                 tokenized["embeddings"] = jina.embed(texts)
@@ -62,6 +62,43 @@ class HFDataset(Dataset):
             self.ds.save_to_disk(config.DATASET_CACHE_DIR)
 
     def __getitem__(self, i):
+        '''
+        returns (array) ref tokens, (array) target tokens for a given i
+        '''
         entry = self.ds[i]
 
         tokens = entry["input_ids"]
+
+        ref_toks = tokens[:-1] # everythign except very last
+        target_toks = tokens[1:] # everything except very first
+
+        return torch.tensor(ref_toks), torch.tensor(target_toks)
+
+    def __len__(self):
+        return len(self.ds)
+
+def collate_fn(batch, pad_id=0):
+    ref_toks_batch, target_toks_batch = zip(*batch)
+    max_len = max(len(entry) for entry in ref_toks_batch)
+    padded_x = torch.full(
+        (len(ref_toks_batch), max_len),
+        pad_id,
+        dtype=torch.long
+    )
+    padded_y = torch.full(
+        (len(target_toks_batch), max_len),
+        pad_id,
+        dtype=torch.long
+    )
+
+    for i, (x, y) in enumerate(zip(ref_toks_batch, target_toks_batch)):
+        padded_x[i, :len(x)] = x
+        padded_y[i, :len(y)] = y
+    return padded_x, padded_y
+
+def get_dataloader(tokenizer, split):
+    dataset = HFDataset(tokenizer, split)
+    return DataLoader(
+        dataset, batch_size=config.DATALOADER_BATCHSIZE, shuffle=True,
+        collate_fn=collate_fn, num_workers=0, pin_memory=True,
+    )

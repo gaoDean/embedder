@@ -11,6 +11,7 @@ BATCH_SIZE = 8
 EPOCHS = 10
 GRADIENT_ACCUMULATION_STEPS = 1
 MAX_LENGTH = 512
+WEIGHT_DECAY = 5e-2
 
 # Hardware & Reproducibility
 DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
@@ -23,3 +24,4 @@ CHECKPOINT_DIR = "checkpoints"
 WANDB_PROJECT = "pythia-hybrid-attention"
 DATASET_CACHE_DIR = "dataset_cache"
 DATASET_ENTRY_LENGTH_LETTERS = 500 # 100 tokens * 5 letters per token
+DATALOADER_BATCHSIZE = 1
