@@ -1,12 +1,29 @@
 import torch
 from model_patcher import load_model
 from dataset import get_dataloader
-import cfg
+import config as cfg
 import time
 import glob
+from tqdm import tqdm
+import checkpoints
+
+def get_lr(it):
+    # 1) linear warmup for warmup_iters steps
+    if it < cfg.WARMUP_ITERS:
+        return cfg.LEARNING_RATE * (it + 1) / (cfg.WARMUP_ITERS + 1)
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > cfg.LR_DECAY_ITERS:
+        return cfg.MIN_LR
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - cfg.WARMUP_ITERS) / (cfg.LR_DECAY_ITERS - cfg.WARMUP_ITERS)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+    return cfg.MIN_LR + coeff * (cfg.LEARNING_RATE - cfg.MIN_LR)
 
 def train():
     device = cfg.DEVICE
+
+    torch.manual_seed(0)
 
     tokenizer, model = load_model()
     model.to(device)
@@ -22,14 +39,6 @@ def train():
         weight_decay=cfg.WEIGHT_DECAY
     )
 
-    steps_per_epoch_effective = cfg.STEPS_PER_EPOCH // cfg.GRADIENT_ACCUMULATION_STEPS
-    total_steps = steps_per_epoch_effective * cfg.EPOCHS
-    warmup_steps = max(1, int(steps_per_epoch_effective))
-
-    s1 = LinearLR(optimiser, start_factor=1e-2, total_iters = warmup_steps)
-    s2 = CosineAnnealingLR(optimiser, T_max=total_steps - warmup_steps, eta_min=1e-6)
-    scheduler = SequentialLR(optimiser, schedulers=[s1, s2], milestones=[warmup_steps])
-
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda") if use_amp else None
 
@@ -39,24 +48,37 @@ def train():
     losses = []
     t0 = time.time()
 
-    checkpoints = glob.glob(os.path.join(orig_cwd, "checkpoint_epoch_*.pt"))
+    latest_cp = checkpoints.get_latest_checkpoint()
 
-    if checkpoints:
-        latest_cp = max(checkpoints, key=lambda x: int(re.search(r'epoch_(\d+)', x).group(1)))
+    if latest_cp:
         print(f"Resuming from full checkpoint: {latest_cp}")
         checkpoint = torch.load(latest_cp, map_location=cfg.device)
         model.load_state_dict(checkpoint['model_state_dict'], strict=True)
         optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
+        best_eval = checkpoint['best_eval']
 
-
-
-
+    if cfg.COMPILE:
+        print("compiling the model...")
+        unoptimized_model = model
+        model = torch.compile(model)
 
     print("TRAINING")
     print("-" * 56)
+
+    for epoch in range(start_epoch, cfg.EPOCHS):
+        model.train()
+        optimiser.zero_grad()
+
+        num_steps = 0
+
+        for step, (x, y) in enumerate(tqdm(train_loader, total=steps_per_epoch)):
+            if step >= steps_per_epoch:
+                break
+
+            x, y = x.to(device), y.to(device)
+
 
 
 def main():

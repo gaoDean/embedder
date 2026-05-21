@@ -6,13 +6,16 @@ CONTEXT_DIM = 768
 HIDDEN_SIZE = None  # Will be retrieved from model config if None
 
 # Training Hyperparameters
+WARMUP_ITERS = 2000 # from nanogpt
+LR_DECAY_ITERS = 30000
 LEARNING_RATE = 1e-4
+MIN_LR = 6e-5
 BATCH_SIZE = 8
 EPOCHS = 100
 STEPS_PER_EPOCH = 1000
 GRADIENT_ACCUMULATION_STEPS = 4
 MAX_LENGTH = 512
-WEIGHT_DECAY = 5e-2
+WEIGHT_DECAY = 1e-1 # nanogpt
 
 # Hardware & Reproducibility
 DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
