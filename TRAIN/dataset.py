@@ -68,17 +68,23 @@ class HFDataset(Dataset):
         entry = self.ds[i]
 
         tokens = entry["input_ids"]
+        attn_mask = entry["attention_mask"]
 
         ref_toks = tokens[:-1] # everythign except very last
+        ref_mask = attn_mask[:-1]
         target_toks = tokens[1:] # everything except very first
 
-        return torch.tensor(ref_toks), torch.tensor(target_toks)
+        return (
+            torch.tensor(ref_toks),
+            torch.tensor(target_toks),
+            torch.tensor(ref_mask),
+        )
 
     def __len__(self):
         return len(self.ds)
 
 def collate_fn(batch, pad_id=0):
-    ref_toks_batch, target_toks_batch = zip(*batch)
+    ref_toks_batch, target_toks_batch, mask_batch = zip(*batch)
     max_len = max(len(entry) for entry in ref_toks_batch)
     padded_x = torch.full(
         (len(ref_toks_batch), max_len),
@@ -87,14 +93,19 @@ def collate_fn(batch, pad_id=0):
     )
     padded_y = torch.full(
         (len(target_toks_batch), max_len),
-        pad_id,
+        -100, # ignore padding tokens when calculating cross entropy loss
+        dtype=torch.long
+    )
+    padded_mask = torch.zeros(
+        (len(mask_batch), max_len),
         dtype=torch.long
     )
 
-    for i, (x, y) in enumerate(zip(ref_toks_batch, target_toks_batch)):
+    for i, (x, y, m) in enumerate(zip(ref_toks_batch, target_toks_batch, mask_batch)):
         padded_x[i, :len(x)] = x
         padded_y[i, :len(y)] = y
-    return padded_x, padded_y
+        padded_mask[i, :len(m)] = m
+    return padded_x, padded_y, padded_mask
 
 def get_dataloader(tokenizer, split, shuffle=True):
     dataset = HFDataset(tokenizer, split)
