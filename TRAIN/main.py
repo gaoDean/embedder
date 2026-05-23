@@ -53,6 +53,19 @@ def train():
     torch.manual_seed(0)
 
     tokenizer, model = load_model()
+    model.float()
+
+    print(model)
+    def activation_hook(module, input, output):
+        print("Activations:", module, input, output)
+
+    def gradient_hook(module, grad_input, grad_output):
+        print("Gradient at conv2:", grad_output)
+        print("gradeitn", torch.isnan(grad_output[0]).any())
+
+    # Register hook on conv2 layer
+    hook_handle = model.gpt_neox.embed_in.register_forward_hook(activation_hook)
+    hook_handle = model.gpt_neox.embed_in.register_full_backward_hook(gradient_hook)
 
 
     model.to(device)
@@ -70,8 +83,12 @@ def train():
         weight_decay=cfg.WEIGHT_DECAY
     )
 
-    use_amp = device == "cuda"
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    scaler = None
+    if device == "cuda":
+        scaler = torch.amp.GradScaler("cuda")
+    else:
+        scaler = torch.amp.GradScaler("mps")
+
 
     model.train()
     start_step = 0
@@ -86,7 +103,7 @@ def train():
         print(f"Resuming from full checkpoint: {latest_cp}")
         checkpoint = torch.load(latest_cp, map_location=cfg.device)
         model.load_state_dict(checkpoint['model_state_dict'], strict=True)
-        optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_step = checkpoint['step'] + 1
         start_epoch = checkpoint['epoch']
@@ -106,15 +123,12 @@ def train():
     for epoch in range(start_epoch, cfg.EPOCHS):
         # ref, target, mask, embedding
         for step, (x, y, mask, e) in enumerate(train_loader, start=start_step):
-            # time.sleep(3)
-            print("XYMASKE")
-            print(x)
-            print(y)
-            print(mask)
-            print(e)
-
             x, y, mask = x.to(device), y.to(device), mask.to(device)
-            e = e.to(device, dtype=model.dtype) # idk why this has to be specified
+            e = e.to(device) # idk why this has to be specified
+
+
+            # print(torch.mean(e))
+            # print(torch.std(e))
 
             # vec = torch.randn(1, cfg.CONTEXT_DIM).to(device=device, dtype=model.dtype)
             # with torch.no_grad():
@@ -123,37 +137,25 @@ def train():
 
             lr = get_lr(step)
             for pg in optimizer.param_groups:
+                print(lr)
                 pg["lr"] = lr
 
-            if use_amp:
-                loss = None
-                with torch.amp.autocast("cuda"):
-                    output = model(
-                        x,
-                        attention_mask=mask,
-                        labels=y,
-                        context_vector=e
-                    )
-                    loss = output.loss
-
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.GRAD_CLIP)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
+            loss = None
+            with torch.amp.autocast(device):
                 output = model(
-                    x,
-                    attention_mask=mask,
+                    input_ids=x,
                     labels=y,
+                    attention_mask=mask,
                     context_vector=e
                 )
-                print(output)
                 loss = output.loss
 
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.GRAD_CLIP)
-                optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.GRAD_CLIP)
+            scaler.step(optimizer)
+            scaler.update()
+
 
             optimizer.zero_grad(set_to_none=True)
             losses.append(loss.item())
@@ -178,13 +180,14 @@ def train():
             #         'step': step,
             #         'epoch': epoch,
             #         'model_state_dict': model_state,
-            #         'optimizer_state_dict': optimiser_state,
+            #         'optimizer_state_dict': optimizer_state,
             #         'scheduler_state_dict': scheduler_state,
             #         'scaler_state_dict': scaler_state
             #     }
             #     checkpoints.save_checkpoint(checkpoint, upload=True)
 
 def main():
+    # torch.set_default_dtype(torch.float32)
     train()
 
 if __name__ == "__main__":

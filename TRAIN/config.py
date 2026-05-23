@@ -15,6 +15,7 @@ EPOCHS = 10
 GRADIENT_ACCUMULATION_STEPS = 4
 GRAD_CLIP = 1.0
 WEIGHT_DECAY = 1e-1 # nanogpt
+MAX_DTYPE="float32"
 
 # Hardware & Reproducibility
 DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")

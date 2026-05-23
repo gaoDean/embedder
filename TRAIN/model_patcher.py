@@ -9,72 +9,44 @@ def load_model(model_name=config.MODEL_NAME, context_dim=config.CONTEXT_DIM):
 
     hidden_size = model.config.hidden_size
 
-    # 1. Inject Cross-Attention into each transformer block
     for layer in model.gpt_neox.layers:
         cross_attn = CrossAttention(hidden_size, context_dim)
-        # Ensure new module matches model precision/device
-        cross_attn.to(device=model.device, dtype=model.dtype)
-        layer.add_module("cross_attention", cross_attn)
+        cross_attn.to(device=model.device)
 
-        def make_custom_forward(l):
-            original_attention_forward = l.attention.forward
-            def custom_attention_forward(hidden_states, attention_mask, layer_past=None, position_embeddings=None, **kwargs):
-                # Execute original self-attention
-                attn_output, layer_past = original_attention_forward(
-                    hidden_states,
-                    attention_mask,
-                    layer_past=layer_past,
-                    position_embeddings=position_embeddings,
-                    **kwargs
-                )
+        layer.attention.add_module("cross_attention", cross_attn)
+        layer.attention.context_vector = None
 
-                # Retrieve context_vector from kwargs
-                context_vector = kwargs.get("context_vector")
-                if context_vector is not None:
-                    cross_attn_out = l.cross_attention(attn_output, context_vector)
-                    attn_output = attn_output + cross_attn_out
+        def attention_forward_hook(module, args, output):
+            attn_output = output[0]
 
-                return attn_output, layer_past
-            return custom_attention_forward
+            if module.context_vector is not None:
+                cross_attn_out = module.cross_attention(attn_output, module.context_vector)
+                attn_output = attn_output + cross_attn_out
 
-        layer.attention.forward = make_custom_forward(layer)
+            return (attn_output,) + output[1:]
 
-    # 2. Patch top-level model forward
-    original_model_forward = model.forward
+        layer.attention.register_forward_hook(attention_forward_hook)
 
-    def model_forward(self, input_ids=None, attention_mask=None, position_ids=None,
-                      inputs_embeds=None, past_key_values=None, use_cache=None,
-                      labels=None, return_dict=None, context_vector=None, **kwargs):
+    def model_pre_hook(module, args, kwargs):
+        context_vector = kwargs.pop("context_vector", None)
 
-        if input_ids is None and inputs_embeds is None and context_vector is not None:
+        if kwargs.get("input_ids") is None and kwargs.get("inputs_embeds") is None and context_vector is not None:
             batch_size = context_vector.shape[0]
             device = context_vector.device
-            input_ids = torch.zeros((batch_size, 1), dtype=torch.long, device=device)
+            kwargs["input_ids"] = torch.zeros((batch_size, 1), dtype=torch.long, device=device)
 
-        print("IDS", input_ids.shape)
-        print("ATTN", attention_mask.shape)
-        print("LABELS", labels.shape)
-        print("CV", context_vector.shape)
+        if context_vector is not None:
+            for layer in module.gpt_neox.layers:
+                layer.attention.context_vector = context_vector
 
-        kwargs["context_vector"] = context_vector
+        return args, kwargs
 
-        return original_model_forward(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            inputs_embeds=inputs_embeds,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            labels=labels,
-            return_dict=return_dict,
-            **kwargs
-        )
+    def model_post_hook(module, args, output):
+        for layer in module.gpt_neox.layers:
+            layer.attention.context_vector = None
+        return output
 
-    model.forward = model_forward.__get__(model, type(model))
-
-    # how to use:
-    # outputs are model(x, labels=y)
-    # logits are model.logits
-    # loss is model.loss
+    model.register_forward_pre_hook(model_pre_hook, with_kwargs=True)
+    model.register_forward_hook(model_post_hook)
 
     return tokenizer, model

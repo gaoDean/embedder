@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 from datasets import load_dataset, load_from_disk
+import torch.nn.functional as F
 from jina_inference import Jina
 import config as cfg
 import os
@@ -61,7 +62,9 @@ class HFDataset(Dataset):
                     texts[i] = clean_ds_entry(entry)
 
                 tokenized = self.llm_tokenizer(texts, add_special_tokens=True, truncation=False)
-                tokenized["embeddings"] = jina.embed(texts)
+
+                embeddings = F.layer_norm(jina.embed(texts), (768,))
+                tokenized["embeddings"] = embeddings
 
                 return tokenized
 
@@ -130,7 +133,11 @@ def collate_fn(batch, pad_id=0):
 
 def get_dataloader(tokenizer, split, shuffle=True):
     dataset = HFDataset(tokenizer, split)
+    pad_id = tokenizer.pad_token_id
+
+    modified_collate_fn = lambda batch: collate_fn(batch, pad_id=pad_id)
+
     return DataLoader(
         dataset, batch_size=cfg.DATALOADER_BATCHSIZE, shuffle=shuffle,
-        collate_fn=collate_fn, num_workers=0, pin_memory=(cfg.DEVICE != "mps"),
+        collate_fn=modified_collate_fn, num_workers=0, pin_memory=(cfg.DEVICE != "mps"),
     )

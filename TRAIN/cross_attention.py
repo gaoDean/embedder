@@ -16,6 +16,8 @@ class CrossAttention(nn.Module):
         # Zero-initialize the output projection to ensure initial neutrality.
         nn.init.zeros_(self.out.weight)
         nn.init.zeros_(self.out.bias)
+        # nn.init.normal_(self.out.weight, mean=0, std=1e-4)
+        # nn.init.normal_(self.out.bias, mean=0, std=1e-4)
 
     def forward(self, x, context_vector):
         if context_vector.dim() == 2:
@@ -30,5 +32,4 @@ class CrossAttention(nn.Module):
         attn_weights = torch.softmax(scores, dim=-1)
 
         out = torch.matmul(attn_weights, v)
-        print(out)
         return self.out(out)
