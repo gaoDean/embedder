@@ -65,7 +65,7 @@ def main():
             process,
             batched=True,
             batch_size=32,
-            remove_columns=['text', 'ids'],
+            remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
             )
