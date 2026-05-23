@@ -10,7 +10,7 @@ from jina_inference import Jina
 num_proc = 8
 num_proc_load_dataset = num_proc
 
-if __name__ == '__main__':
+def main():
     dataset = load_dataset("openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
 
@@ -31,12 +31,12 @@ if __name__ == '__main__':
 
     if os.path.exists(cfg.DATASET_CACHE_DIR):
         print("dataset already exists")
-        return
+        return None
 
     jina = Jina()
 
     def process(batch):
-                """
+        """
         takes in a dataset batch
 
         returns {
@@ -58,16 +58,19 @@ if __name__ == '__main__':
 
     # tokenize the dataset
     tokenized = split_dataset.map(
-        process,
-        batched=True,
-        batch_size=32,
-        remove_columns=['text', 'ids'],
-        desc="processing dataset",
-        num_proc=num_proc,
-    )
+            process,
+            batched=True,
+            batch_size=32,
+            remove_columns=['text', 'ids'],
+            desc="processing dataset",
+            num_proc=num_proc,
+            )
 
     tokenized.save_to_disk(cfg.DATASET_CACHE_DIR)
 
     # train.bin is ~17GB, val.bin ~8.5MB
     # train has ~9B tokens (9,035,582,198)
     # val has ~4M tokens (4,434,897)
+
+if __name__ == '__main__':
+    main()
