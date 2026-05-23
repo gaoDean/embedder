@@ -29,6 +29,7 @@ def evaluate(model, dataloader):
 
     model.eval()
     total_loss = 0
+    total_vectorless_loss = 0
 
     for n, (x, y, mask, e) in enumerate(dataloader):
         if n >= cfg.MAX_EVAL_TESTS:
@@ -36,18 +37,29 @@ def evaluate(model, dataloader):
 
         x, y, mask, e = x.to(device), y.to(device), mask.to(device), e.to(device)
 
+        rand_e = torch.randn(len(mask), config.CONTEXT_DIM).to(device=device)
+
         output = model(
             input_ids=x,
             labels=y,
             attention_mask=mask,
             context_vector=e
         )
-        loss = output.loss
+        rand_e_output = model(
+            input_ids=x,
+            labels=y,
+            attention_mask=mask,
+            context_vector=rand_e
+        )
 
+        loss = output.loss
+        rand_e_loss = rand_e_output.loss
+
+        total_rand_e_loss += rand_e_loss.item()
         total_loss += loss.item()
 
     model.train()
-    return total_loss / max(1, n)
+    return (total_loss / max(1, n)), (total_rand_e_loss / max(1, n))
 
 
 def train():
@@ -81,6 +93,7 @@ def train():
     start_epoch = 0
     best_eval = float("inf")
     losses = []
+    rand_el = 0
     t0 = time.time()
 
     latest_cp = checkpoints.get_latest_checkpoint()
@@ -160,7 +173,7 @@ def train():
                 print(f"{step:6d} | {lr:10.6f} | {avg:10.4f} | {'--':>10} | {elapsed:7.1f}s")
 
             if step > 0 and step % cfg.EVAL_ITERS == 0:
-                el = evaluate(model, eval_loader)
+                el, rand_el = evaluate(model, eval_loader)
                 avg = sum(losses[-cfg.EVAL_ITERS:]) / min(len(losses), cfg.EVAL_ITERS)
                 elapsed = time.time() - t0
                 print(f"{step:6d} | {lr:10.6f} | {avg:10.4f} | {el:10.4f} | {elapsed:7.1f}s")
@@ -169,7 +182,7 @@ def train():
                     best_eval = el
                     print(f"  -> Best model (eval={el:.4f})")
 
-            checkpoints.wandb_log(step, lr, avg, elapsed, best_eval)
+            checkpoints.wandb_log(step, lr, avg, elapsed, best_eval, rand_el)
 
             if step > 0 and step % cfg.SAVE_ITERS == 0:
                 checkpoint = {

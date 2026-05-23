@@ -9,7 +9,7 @@ import re
 def wandb_init():
     wandb.init(project=cfg.WANDB_PROJECT)
 
-def wandb_log(step, lr, loss, time, el):
+def wandb_log(step, lr, loss, time, el, rand_el):
     if wandb.run is not None:
         wandb.log(
                     {
@@ -17,7 +17,8 @@ def wandb_log(step, lr, loss, time, el):
                         "train/lr": lr,
                         "train/loss": loss,
                         "train/time": time,
-                        "eval/el": el
+                        "eval/el": el,
+                        "eval/rand_el": rand_el,
                     }
                 )
 
