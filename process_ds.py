@@ -11,7 +11,7 @@ num_proc = 8
 num_proc_load_dataset = num_proc
 
 def main():
-    dataset = load_dataset("openwebtext", num_proc=num_proc_load_dataset)
+    dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
 
     # this results in:
@@ -48,6 +48,10 @@ def main():
 
 
         texts = batch["article"]
+
+        for i, entry in enumerate(texts):
+            if len(entry) > cfg.MAX_TEXT_LENGTH:
+                texts[i] = texts[i][:cfg.MAX_TEXT_LENGTH]
 
         tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
 
