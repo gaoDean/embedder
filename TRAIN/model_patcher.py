@@ -1,11 +1,11 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from cross_attention import CrossAttention
-import config
+import config as cfg
 
-def load_model(model_name=config.MODEL_NAME, context_dim=config.CONTEXT_DIM):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+def load_model(model_name=cfg.MODEL_NAME, context_dim=cfg.CONTEXT_DIM):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, dtype=cfg.DTYPE)
+    model = AutoModelForCausalLM.from_pretrained(model_name, dtype=cfg.DTYPE)
 
     hidden_size = model.config.hidden_size
 

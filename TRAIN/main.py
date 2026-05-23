@@ -53,19 +53,8 @@ def train():
     torch.manual_seed(0)
 
     tokenizer, model = load_model()
+
     model.float()
-
-    print(model)
-    def activation_hook(module, input, output):
-        print("Activations:", module, input, output)
-
-    def gradient_hook(module, grad_input, grad_output):
-        print("Gradient at conv2:", grad_output)
-        print("gradeitn", torch.isnan(grad_output[0]).any())
-
-    # Register hook on conv2 layer
-    hook_handle = model.gpt_neox.embed_in.register_forward_hook(activation_hook)
-    hook_handle = model.gpt_neox.embed_in.register_full_backward_hook(gradient_hook)
 
 
     model.to(device)
@@ -80,15 +69,11 @@ def train():
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=cfg.LEARNING_RATE,
-        weight_decay=cfg.WEIGHT_DECAY
+        weight_decay=cfg.WEIGHT_DECAY,
     )
 
-    scaler = None
-    if device == "cuda":
-        scaler = torch.amp.GradScaler("cuda")
-    else:
-        scaler = torch.amp.GradScaler("mps")
-
+    use_amp = device == "cuda"
+    scaler = torch.amp.GradScaler("cuda") if use_amp else torch.amp.GradScaler("mps")
 
     model.train()
     start_step = 0
@@ -124,7 +109,7 @@ def train():
         # ref, target, mask, embedding
         for step, (x, y, mask, e) in enumerate(train_loader, start=start_step):
             x, y, mask = x.to(device), y.to(device), mask.to(device)
-            e = e.to(device) # idk why this has to be specified
+            e = e.to(device)
 
 
             # print(torch.mean(e))
@@ -137,33 +122,46 @@ def train():
 
             lr = get_lr(step)
             for pg in optimizer.param_groups:
-                print(lr)
                 pg["lr"] = lr
 
-            loss = None
-            with torch.amp.autocast(device):
+            if use_amp:
+                loss = None
+                with torch.amp.autocast("cuda"):
+                    output = model(
+                        input_ids=x,
+                        labels=y,
+                        attention_mask=mask,
+                        context_vector=e
+                    )
+                    loss = output.loss
+
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.GRAD_CLIP)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
                 output = model(
                     input_ids=x,
                     labels=y,
                     attention_mask=mask,
                     context_vector=e
                 )
+                print("LOTIGS", output)
                 loss = output.loss
 
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.GRAD_CLIP)
-            scaler.step(optimizer)
-            scaler.update()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.GRAD_CLIP)
+                optimizer.step()
 
 
             optimizer.zero_grad(set_to_none=True)
             losses.append(loss.item())
-            #
-            # if step % cfg.LOG_ITERS == 0:
-            #     avg = sum(losses[-100:]) / len(losses[-100:])
-            #     elapsed = time.time() - t0
-            #     print(f"{step:6d} | {lr:10.6f} | {avg:10.4f} | {'--':>10} | {elapsed:7.1f}s")
+
+            if step % cfg.LOG_ITERS == 0:
+                avg = sum(losses[-100:]) / len(losses[-100:])
+                elapsed = time.time() - t0
+                print(f"{step:6d} | {lr:10.6f} | {avg:10.4f} | {'--':>10} | {elapsed:7.1f}s")
 
             # if step > 0 and step % cfg.EVAL_ITERS == 0:
             #     el = evaluate(model, eval_loader)
