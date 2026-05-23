@@ -61,8 +61,8 @@ def train():
 
     # train_loader = get_dataloader(tokenizer, split="train") # TODO
     # eval_loader = get_dataloader(tokenizer, split="validation", shuffle=False) # TODO
-    train_loader = get_dataloader(tokenizer, split="train[:3000]")
-    eval_loader = get_dataloader(tokenizer, split="validation[:100]", shuffle=False)
+    train_loader = get_dataloader(tokenizer, split="train")
+    eval_loader = get_dataloader(tokenizer, split="validation", shuffle=False)
     print(f"Train: {len(train_loader.dataset):,}, Eval: {len(eval_loader.dataset):,}")
 
     optimizer = torch.optim.AdamW(
@@ -178,7 +178,9 @@ def train():
                     'scaler_state_dict': scaler.state_dict(),
                     'best_eval': best_eval
                 }
-                checkpoints.save_checkpoint(checkpoint, upload=True)
+                upload = step % cfg.UPLOAD_ITERS == 0
+                checkpoints.save_checkpoint(checkpoint, upload=upload)
+
 
 def main():
     train()

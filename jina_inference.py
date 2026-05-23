@@ -3,6 +3,7 @@ import torch.nn as nn
 import os
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
+import config as cfg
 
 
 class Encoder(nn.Module):
@@ -33,7 +34,7 @@ class Encoder(nn.Module):
             truncation=False,
             padding=True,
             return_tensors="pt"
-        ).to("mps")
+        ).to(cfg.DEVICE)
 
         input_ids = tokenized.input_ids.unsqueeze(1)
         attention_mask = tokenized.attention_mask.unsqueeze(1)
@@ -63,7 +64,7 @@ class Encoder(nn.Module):
 
 class Jina():
     def __init__(self):
-        self.model = Encoder().to("mps")
+        self.model = Encoder().to(cfg.DEVICE)
         self.model.eval()
 
     def embed(self, text_arr, batch_size=32):
