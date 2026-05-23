@@ -13,7 +13,7 @@ class Encoder(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
 
         self.backbone = AutoModel.from_pretrained(
-            'jinaai/jina-embeddings-v5-text-nano',
+            'jinaai/jina-embeddings-v5-text-small',
             trust_remote_code=True,
         )
 
