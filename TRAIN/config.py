@@ -10,22 +10,23 @@ WARMUP_ITERS = 2000 # from nanogpt
 LR_DECAY_ITERS = 30000
 LEARNING_RATE = 1e-4
 MIN_LR = 6e-5
-BATCH_SIZE = 8
-EPOCHS = 100
-STEPS_PER_EPOCH = 1000
+BATCH_SIZE = 1
+EPOCHS = 10
 GRADIENT_ACCUMULATION_STEPS = 4
-MAX_LENGTH = 512
+GRAD_CLIP = 1.0
 WEIGHT_DECAY = 1e-1 # nanogpt
 
 # Hardware & Reproducibility
 DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
 SEED = 42
+COMPILE = False
 
 # Logging & Checkpoints
-LOG_INTERVAL = 10
-SAVE_INTERVAL = 100
+LOG_ITERS = 20
 CHECKPOINT_DIR = "checkpoints"
-WANDB_PROJECT = "pythia-hybrid-attention"
+WANDB_PROJECT = "Inverse embedder"
 DATASET_CACHE_DIR = "dataset_cache"
 DATASET_ENTRY_LENGTH_LETTERS = 500 # 100 tokens * 5 letters per token
 DATALOADER_BATCHSIZE = 1
+EVAL_ITERS = 200
+SAVE_ITERS = 400

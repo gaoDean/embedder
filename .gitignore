@@ -11,6 +11,7 @@ outputs
 wandb
 
 *.pt
+*.arrow
 
 # Distribution / packaging
 .Python

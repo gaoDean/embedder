@@ -51,6 +51,11 @@ def load_model(model_name=config.MODEL_NAME, context_dim=config.CONTEXT_DIM):
             device = context_vector.device
             input_ids = torch.zeros((batch_size, 1), dtype=torch.long, device=device)
 
+        print("IDS", input_ids.shape)
+        print("ATTN", attention_mask.shape)
+        print("LABELS", labels.shape)
+        print("CV", context_vector.shape)
+
         kwargs["context_vector"] = context_vector
 
         return original_model_forward(
@@ -67,8 +72,9 @@ def load_model(model_name=config.MODEL_NAME, context_dim=config.CONTEXT_DIM):
 
     model.forward = model_forward.__get__(model, type(model))
 
-    # outputs = model(x, labels=y)
-    # logits = model.logits
-    # loss = model.loss
+    # how to use:
+    # outputs are model(x, labels=y)
+    # logits are model.logits
+    # loss is model.loss
 
     return tokenizer, model

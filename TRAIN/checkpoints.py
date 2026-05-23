@@ -5,14 +5,14 @@ import wandb
 import config as cfg
 
 def wandb_init():
-    wandb.init(project="Inverse Embedder", config=dict(cfg))
+    wandb.init(project=cfg.WANDB_PROJECT, config=dict(cfg))
 
-def get_lastest_checkpoint():
+def get_latest_checkpoint():
     '''
     if no checkpoints, returns None
     '''
 
-    orig_cwd = hydra.utils.get_original_cwd()
+    orig_cwd = os.getcwd()
 
     checkpoints = glob.glob(os.path.join(orig_cwd, "checkpoint_epoch_*.pt"))
 
@@ -23,22 +23,8 @@ def get_lastest_checkpoint():
 
     return None
 
-def save_checkpoint(
-    epoch,
-    model_state,
-    optimiser_state,
-    scheduler_state,
-    scalar_state,
-):
-    orig_cwd = hydra.utils.get_original_cwd()
-
-    checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model_state,
-        'optimizer_state_dict': optimiser_state,
-        'scheduler_state_dict': scheduler_state,
-        'scaler_state_dict': scaler_state
-    }
+def save_checkpoint(checkpoint, upload=False):
+    orig_cwd = os.getcwd()
 
     checkpoint_path = os.path.join(orig_cwd, f"checkpoint_epoch_{epoch}.pt")
     torch.save(checkpoint, checkpoint_path)
