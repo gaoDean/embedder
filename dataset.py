@@ -67,7 +67,7 @@ class HFDataset(Dataset):
 
                 tokenized = self.llm_tokenizer(texts, add_special_tokens=True, truncation=False)
 
-                embeddings = F.layer_norm(jina.embed(texts), (768,))
+                embeddings = F.layer_norm(jina.embed(texts), (cfg.CONTEXT_DIM,))
                 tokenized["embeddings"] = embeddings
 
                 return tokenized
