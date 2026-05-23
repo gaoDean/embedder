@@ -7,8 +7,8 @@ from transformers import AutoTokenizer
 from jina_inference import Jina
 
 # 8 jina instances
-num_proc = 8
-num_proc_load_dataset = num_proc
+num_proc = 0 # no multiple jina
+num_proc_load_dataset = 8
 
 def main():
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
