@@ -33,7 +33,7 @@ def main():
         print("dataset already exists")
         return None
 
-    jina = Jina()
+    jina = torch.compile(Jina())
 
     def process(batch):
         """
@@ -64,7 +64,7 @@ def main():
     tokenized = split_dataset.map(
             process,
             batched=True,
-            batch_size=32,
+            batch_size=160,
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
