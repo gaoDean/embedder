@@ -33,7 +33,7 @@ def main():
         print("dataset already exists")
         return None
 
-    jina = torch.compile(Jina())
+    jina = Jina()
 
     def process(batch):
         """
