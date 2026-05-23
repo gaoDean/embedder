@@ -138,6 +138,6 @@ def get_dataloader(tokenizer, split, shuffle=True):
     modified_collate_fn = lambda batch: collate_fn(batch, pad_id=pad_id)
 
     return DataLoader(
-        dataset, batch_size=cfg.DATALOADER_BATCHSIZE, shuffle=shuffle,
+        dataset, batch_size=cfg.BATCH_SIZE, shuffle=shuffle,
         collate_fn=modified_collate_fn, num_workers=0, pin_memory=(cfg.DEVICE != "mps"),
     )

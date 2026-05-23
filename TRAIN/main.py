@@ -53,16 +53,13 @@ def train():
     torch.manual_seed(0)
 
     tokenizer, model = load_model()
-
     model.float()
-
-
     model.to(device)
     print(f"Model loaded")
 
     # train_loader = get_dataloader(tokenizer, split="train") # TODO
     # eval_loader = get_dataloader(tokenizer, split="validation", shuffle=False) # TODO
-    train_loader = get_dataloader(tokenizer, split="train[:100]")
+    train_loader = get_dataloader(tokenizer, split="train[:3000]")
     eval_loader = get_dataloader(tokenizer, split="validation[:100]", shuffle=False)
     print(f"Train: {len(train_loader.dataset):,}, Eval: {len(eval_loader.dataset):,}")
 
@@ -103,22 +100,11 @@ def train():
     print(f"{'Step':>6} | {'LR':>10} | {'Train':>10} | {'Eval':>10} | {'Time':>8}")
     print("-" * 56)
 
-    torch.autograd.set_detect_anomaly(True)
-
     for epoch in range(start_epoch, cfg.EPOCHS):
         # ref, target, mask, embedding
         for step, (x, y, mask, e) in enumerate(train_loader, start=start_step):
             x, y, mask = x.to(device), y.to(device), mask.to(device)
             e = e.to(device)
-
-
-            # print(torch.mean(e))
-            # print(torch.std(e))
-
-            # vec = torch.randn(1, cfg.CONTEXT_DIM).to(device=device, dtype=model.dtype)
-            # with torch.no_grad():
-            #     out_vec = model.generate(x, max_new_tokens=20, do_sample=False, context_vector=vec)
-            #     print(out_vec)
 
             lr = get_lr(step)
             for pg in optimizer.param_groups:
@@ -147,7 +133,6 @@ def train():
                     attention_mask=mask,
                     context_vector=e
                 )
-                print("LOTIGS", output)
                 loss = output.loss
 
                 loss.backward()

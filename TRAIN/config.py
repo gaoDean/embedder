@@ -10,11 +10,11 @@ WARMUP_ITERS = 2000 # from nanogpt
 LR_DECAY_ITERS = 30000
 LEARNING_RATE = 1e-4
 MIN_LR = 6e-5
-BATCH_SIZE = 1
+BATCH_SIZE = 8
 EPOCHS = 10
 GRADIENT_ACCUMULATION_STEPS = 4
 GRAD_CLIP = 1.0
-WEIGHT_DECAY = 1e-1 # nanogpt
+WEIGHT_DECAY = 5e-2 # nanogpt
 DTYPE=torch.bfloat16
 
 # Hardware & Reproducibility
