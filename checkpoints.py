@@ -5,7 +5,7 @@ import wandb
 import config as cfg
 
 def wandb_init():
-    wandb.init(project=cfg.WANDB_PROJECT, config=dict(cfg))
+    wandb.init(project=cfg.WANDB_PROJECT)
 
 def get_latest_checkpoint():
     '''

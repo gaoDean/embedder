@@ -28,9 +28,13 @@ class HFDataset(Dataset):
     def __init__(self, llm_tokenizer, split="train"):
         self.llm_tokenizer = llm_tokenizer
 
-        if os.path.exists(cfg.DATASET_CACHE_DIR):
-            print(f"Loading cached dataset from {cfg.DATASET_CACHE_DIR}...")
-            self.ds = load_from_disk(cfg.DATASET_CACHE_DIR)
+        # Sanitize split name to keep caching distinct for each split
+        sanitized_split = re.sub(r'[^a-zA-Z0-9]', '_', split)
+        cache_dir = f"{cfg.DATASET_CACHE_DIR}_{sanitized_split}"
+
+        if os.path.exists(cache_dir):
+            print(f"Loading cached dataset from {cache_dir}...")
+            self.ds = load_from_disk(cache_dir)
         else:
             print("Processing dataset (no cache found) ...")
             ds = load_dataset("abisee/cnn_dailymail", "3.0.0", split=split)
@@ -77,8 +81,8 @@ class HFDataset(Dataset):
                 remove_columns=ds.column_names
             )
 
-            print(f"Saving dataset to {cfg.DATASET_CACHE_DIR} ...")
-            self.ds.save_to_disk(cfg.DATASET_CACHE_DIR)
+            print(f"Saving dataset to {cache_dir} ...")
+            self.ds.save_to_disk(cache_dir)
 
     def __getitem__(self, i):
         '''
@@ -107,6 +111,11 @@ class HFDataset(Dataset):
 def collate_fn(batch, pad_id=0):
     ref_toks_batch, target_toks_batch, mask_batch, embedding_batch = zip(*batch)
     max_len = max(len(entry) for entry in ref_toks_batch)
+
+    # Round max_len up to the nearest multiple of 8 to reduce the number of unique tensor shapes.
+    # This prevents the MPS backend on Apple Silicon from constantly compiling new execution graphs.
+    max_len = ((max_len + 7) // 8) * 8
+
     padded_x = torch.full(
         (len(ref_toks_batch), max_len),
         pad_id,
@@ -122,6 +131,7 @@ def collate_fn(batch, pad_id=0):
         dtype=torch.long
     )
 
+    # Stack the embeddings to preserve individual context vectors for each batch item
     embedding_processed = embedding_batch[0].repeat(len(mask_batch), 1)
 
     for i, (x, y, m) in enumerate(zip(ref_toks_batch, target_toks_batch, mask_batch)):

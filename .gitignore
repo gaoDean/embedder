@@ -12,6 +12,7 @@ wandb
 
 *.pt
 *.arrow
+cache
 
 # Distribution / packaging
 .Python
