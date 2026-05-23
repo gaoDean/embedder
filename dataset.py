@@ -76,7 +76,6 @@ class HFDataset(Dataset):
                 dataset_map_fn,
                 batched = True,
                 load_from_cache_file=False, # llm call cant be optimised
-                # num_proc = 1, # because we're doing inference
                 num_proc = None, # because we're doing inference
                 remove_columns=ds.column_names
             )
