@@ -3,6 +3,8 @@ import glob
 import hydra.utils
 import wandb
 import config as cfg
+import torch
+import re
 
 def wandb_init():
     wandb.init(project=cfg.WANDB_PROJECT)
@@ -38,15 +40,14 @@ def get_latest_checkpoint():
 def save_checkpoint(checkpoint, upload=False):
     orig_cwd = os.getcwd()
 
-    checkpoint_path = os.path.join(orig_cwd, f"checkpoint_epoch_{epoch}.pt")
+    checkpoint_path = os.path.join(orig_cwd, f"checkpoint_epoch_{checkpoint['epoch']}.pt")
     torch.save(checkpoint, checkpoint_path)
 
-    print(f"Checkpoint saved for epoch {epoch}")
+    print(f"Checkpoint saved for epoch {checkpoint['epoch']} step {checkpoint['step']}")
 
     if wandb.run is not None:
-
-        artifact = wandb.Artifact(f"model-checkpoint-epoch-{epoch}", type="model")
+        artifact = wandb.Artifact(f"model-checkpoint-{checkpoint['epoch']}-{checkpoint['step']}", type="model")
         artifact.add_file(checkpoint_path)
         wandb.log_artifact(artifact)
 
-        print(f"Checkpoint uploaded to wandb for epoch {epoch}")
+        print(f"Checkpoint uploaded to wandb for epoch {checkpoint['epoch']}")

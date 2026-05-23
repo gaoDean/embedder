@@ -61,7 +61,7 @@ def train():
 
     # train_loader = get_dataloader(tokenizer, split="train") # TODO
     # eval_loader = get_dataloader(tokenizer, split="validation", shuffle=False) # TODO
-    train_loader = get_dataloader(tokenizer, split="train[:9000]")
+    train_loader = get_dataloader(tokenizer, split="train[:3000]")
     eval_loader = get_dataloader(tokenizer, split="validation[:100]", shuffle=False)
     print(f"Train: {len(train_loader.dataset):,}, Eval: {len(eval_loader.dataset):,}")
 
@@ -85,13 +85,15 @@ def train():
 
     if latest_cp:
         print(f"Resuming from full checkpoint: {latest_cp}")
-        checkpoint = torch.load(latest_cp, map_location=cfg.device)
+        checkpoint = torch.load(latest_cp, map_location=cfg.DEVICE)
         model.load_state_dict(checkpoint['model_state_dict'], strict=True)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_step = checkpoint['step'] + 1
         start_epoch = checkpoint['epoch']
         best_eval = checkpoint['best_eval']
+        avg = None
+        elapsed = None
 
     if cfg.COMPILE:
         print("compiling the model...")
@@ -99,7 +101,8 @@ def train():
         model = torch.compile(model)
 
 
-    checkpoints.wandb_init()
+    if cfg.WANDB_EN:
+        checkpoints.wandb_init()
 
     print("TRAINING")
     print(f"{'Step':>6} | {'LR':>10} | {'Train':>10} | {'Eval':>10} | {'Time':>8}")
@@ -156,9 +159,9 @@ def train():
 
             if step > 0 and step % cfg.EVAL_ITERS == 0:
                 el = evaluate(model, eval_loader)
-                avg_train = sum(losses[-cfg.EVAL_ITERS:]) / min(len(losses), cfg.EVAL_ITERS)
+                avg = sum(losses[-cfg.EVAL_ITERS:]) / min(len(losses), cfg.EVAL_ITERS)
                 elapsed = time.time() - t0
-                print(f"{step:6d} | {lr:10.6f} | {avg_train:10.4f} | {el:10.4f} | {elapsed:7.1f}s")
+                print(f"{step:6d} | {lr:10.6f} | {avg:10.4f} | {el:10.4f} | {elapsed:7.1f}s")
 
                 if el < best_eval:
                     best_eval = el
@@ -170,10 +173,10 @@ def train():
                 checkpoint = {
                     'step': step,
                     'epoch': epoch,
-                    'model_state_dict': model_state,
-                    'optimizer_state_dict': optimizer_state,
-                    'scheduler_state_dict': scheduler_state,
-                    'scaler_state_dict': scaler_state
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scaler_state_dict': scaler.state_dict(),
+                    'best_eval': best_eval
                 }
                 checkpoints.save_checkpoint(checkpoint, upload=True)
 

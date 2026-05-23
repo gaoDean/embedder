@@ -4,6 +4,7 @@ import torch
 MODEL_NAME = "EleutherAI/pythia-70m-deduped"
 CONTEXT_DIM = 768
 HIDDEN_SIZE = None  # Will be retrieved from model config if None
+WANDB_EN = False
 
 # Training Hyperparameters
 WARMUP_ITERS = 2000 # from nanogpt
@@ -31,4 +32,4 @@ DATASET_CACHE_DIR = "cache/dataset"
 DATASET_ENTRY_LENGTH_LETTERS = 500 # 100 tokens * 5 letters per token
 DATALOADER_BATCHSIZE = 1
 EVAL_ITERS = 200
-SAVE_ITERS = 400
+SAVE_ITERS = 1000
