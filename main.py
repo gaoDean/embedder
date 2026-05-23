@@ -55,7 +55,9 @@ def train():
     torch.manual_seed(0)
 
     tokenizer, model = load_model()
-    model.float()
+    if device == "mps":
+        model.float()
+
     model.to(device)
     print(f"Model loaded")
 

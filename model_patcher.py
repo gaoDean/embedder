@@ -4,8 +4,13 @@ from cross_attention import CrossAttention
 import config as cfg
 
 def load_model(model_name=cfg.MODEL_NAME, context_dim=cfg.CONTEXT_DIM):
-    tokenizer = AutoTokenizer.from_pretrained(model_name, dtype=cfg.DTYPE)
-    model = AutoModelForCausalLM.from_pretrained(model_name, dtype=cfg.DTYPE)
+    tokenizer, model = None, None
+    if cfg.DEVICE == "mps":
+        tokenizer = AutoTokenizer.from_pretrained(model_name, dtype=cfg.DTYPE)
+        model = AutoModelForCausalLM.from_pretrained(model_name, dtype=cfg.DTYPE)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name)
 
     hidden_size = model.config.hidden_size
 
