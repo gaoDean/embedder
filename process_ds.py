@@ -28,7 +28,7 @@ def main():
     # })
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
-    e_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDER_MODEL_NAME, trust_remote_code=True)
+    e_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
     if os.path.exists(cfg.DATASET_CACHE_DIR):
         print("dataset already exists")
