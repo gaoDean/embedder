@@ -29,7 +29,7 @@ def evaluate(model, dataloader):
 
     model.eval()
     total_loss = 0
-    total_vectorless_loss = 0
+    total_rand_e_loss = 0
 
     for n, (x, y, mask, e) in enumerate(dataloader):
         if n >= cfg.MAX_EVAL_TESTS:
@@ -45,6 +45,8 @@ def evaluate(model, dataloader):
             attention_mask=mask,
             context_vector=e
         )
+
+        # randomise e to test if the model really does look at the vector
         rand_e_output = model(
             input_ids=x,
             labels=y,
