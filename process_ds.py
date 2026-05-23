@@ -47,7 +47,7 @@ def main():
         """
 
 
-        texts = batch["article"]
+        texts = batch["text"]
 
         for i, entry in enumerate(texts):
             if len(entry) > cfg.MAX_TEXT_LENGTH:
