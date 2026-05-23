@@ -37,7 +37,7 @@ def evaluate(model, dataloader):
 
         x, y, mask, e = x.to(device), y.to(device), mask.to(device), e.to(device)
 
-        rand_e = torch.randn(len(mask), config.CONTEXT_DIM).to(device=device)
+        rand_e = torch.randn(len(mask), cfg.CONTEXT_DIM).to(device=device)
 
         output = model(
             input_ids=x,
