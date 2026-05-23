@@ -7,6 +7,18 @@ import config as cfg
 def wandb_init():
     wandb.init(project=cfg.WANDB_PROJECT)
 
+def wandb_log(step, lr, loss, time, el):
+    if wandb.run is not None:
+        wandb.log(
+                    {
+                        "train/step": step,
+                        "train/lr": lr,
+                        "train/loss": loss,
+                        "train/time": time,
+                        "eval/el": el
+                    }
+                )
+
 def get_latest_checkpoint():
     '''
     if no checkpoints, returns None

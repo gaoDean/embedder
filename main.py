@@ -23,22 +23,22 @@ def get_lr(it):
     return cfg.MIN_LR + coeff * (cfg.LEARNING_RATE - cfg.MIN_LR)
 
 @torch.no_grad()
-def evaluate(model, dataloader, max_tests=50):
+def evaluate(model, dataloader):
     device = cfg.DEVICE
 
     model.eval()
     total_loss = 0
 
     for n, (x, y, mask, e) in enumerate(dataloader):
-        if n >= max_tests:
+        if n >= cfg.MAX_EVAL_TESTS:
             break
 
         x, y, mask, e = x.to(device), y.to(device), mask.to(device), e.to(device)
 
         output = model(
-            x,
-            attention_mask=mask,
+            input_ids=x,
             labels=y,
+            attention_mask=mask,
             context_vector=e
         )
         loss = output.loss
@@ -61,7 +61,7 @@ def train():
 
     # train_loader = get_dataloader(tokenizer, split="train") # TODO
     # eval_loader = get_dataloader(tokenizer, split="validation", shuffle=False) # TODO
-    train_loader = get_dataloader(tokenizer, split="train[:3000]")
+    train_loader = get_dataloader(tokenizer, split="train[:9000]")
     eval_loader = get_dataloader(tokenizer, split="validation[:100]", shuffle=False)
     print(f"Train: {len(train_loader.dataset):,}, Eval: {len(eval_loader.dataset):,}")
 
@@ -95,8 +95,11 @@ def train():
 
     if cfg.COMPILE:
         print("compiling the model...")
-        unoptimized_model = model
+        # unoptimized_model = model
         model = torch.compile(model)
+
+
+    checkpoints.wandb_init()
 
     print("TRAINING")
     print(f"{'Step':>6} | {'LR':>10} | {'Train':>10} | {'Eval':>10} | {'Time':>8}")
@@ -161,6 +164,8 @@ def train():
                     best_eval = el
                     print(f"  -> Best model (eval={el:.4f})")
 
+            checkpoints.wandb_log(step, lr, avg, elapsed, best_eval)
+
             if step > 0 and step % cfg.SAVE_ITERS == 0:
                 checkpoint = {
                     'step': step,
@@ -173,7 +178,6 @@ def train():
                 checkpoints.save_checkpoint(checkpoint, upload=True)
 
 def main():
-    checkpoints.wandb_init()
     train()
 
 if __name__ == "__main__":
