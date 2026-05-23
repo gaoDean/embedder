@@ -2,9 +2,9 @@ import torch
 
 # Model Configuration
 MODEL_NAME = "EleutherAI/pythia-70m-deduped"
-EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v5-text-small"
+EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v5-text-nano"
 # MODEL_NAME = "EleutherAI/pythia-160m"
-CONTEXT_DIM = 1024
+CONTEXT_DIM = 768
 HIDDEN_SIZE = None  # Will be retrieved from model config if None
 WANDB_EN = True
 
