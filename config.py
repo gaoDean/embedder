@@ -2,6 +2,8 @@ import torch
 
 # Model Configuration
 MODEL_NAME = "EleutherAI/pythia-70m-deduped"
+EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v5-text-small"
+# MODEL_NAME = "EleutherAI/pythia-160m"
 CONTEXT_DIM = 1024
 HIDDEN_SIZE = None  # Will be retrieved from model config if None
 WANDB_EN = True
@@ -29,8 +31,9 @@ LOG_ITERS = 20
 CHECKPOINT_DIR = "checkpoints"
 WANDB_PROJECT = "Inverse embedder"
 DATASET_CACHE_DIR = "cache/dataset"
-DATASET_ENTRY_LENGTH_LETTERS = 500 # 100 tokens * 5 letters per token
 DATALOADER_BATCHSIZE = 1
 EVAL_ITERS = 500
 SAVE_ITERS = 1000
+MAX_TEXT_LENGTH = 100 * 5 # 100 tokens
 UPLOAD_ITERS = 50000
+DS_N_PROC = 8

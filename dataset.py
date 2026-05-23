@@ -37,7 +37,7 @@ class HFDataset(Dataset):
             self.ds = load_from_disk(cache_dir)
         else:
             print("Processing dataset (no cache found) ...")
-            ds = load_dataset("abisee/cnn_dailymail", "3.0.0", split=split)
+            ds = load_dataset("openwebtext", , split=split)
             jina = Jina()
 
             # print(ds[0])
