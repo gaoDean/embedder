@@ -2,7 +2,7 @@ import torch
 
 # Model Configuration
 MODEL_NAME = "EleutherAI/pythia-70m-deduped"
-CONTEXT_DIM = 768
+CONTEXT_DIM = 1024
 HIDDEN_SIZE = None  # Will be retrieved from model config if None
 WANDB_EN = False
 
