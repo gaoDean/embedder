@@ -31,34 +31,49 @@ def evaluate(model, dataloader):
     total_loss = 0
     total_rand_e_loss = 0
 
+    # Because torch.no_grad() is a decorator, we don't need a context manager here,
+    # but when the model uses torch.compile, sometimes the autocast context is needed 
+    # if it's mixed precision. Let's make sure the eval context is perfectly matching train.
+    use_amp = (device == "cuda")
+    amp_device = "cuda" if device == "cuda" else "mps"
+
     for n, (x, y, mask, e) in enumerate(dataloader):
         if n >= cfg.MAX_EVAL_TESTS:
             break
 
         x, y, mask, e = x.to(device), y.to(device), mask.to(device), e.to(device)
+        rand_e = torch.randn(len(mask), cfg.CONTEXT_DIM, device=device)
 
-        rand_e = torch.randn(len(mask), cfg.CONTEXT_DIM).to(device=device)
+        if use_amp:
+            with torch.amp.autocast(amp_device):
+                output = model(
+                    input_ids=x,
+                    labels=y,
+                    attention_mask=mask,
+                    context_vector=e
+                )
+                rand_e_output = model(
+                    input_ids=x,
+                    labels=y,
+                    attention_mask=mask,
+                    context_vector=rand_e
+                )
+        else:
+            output = model(
+                input_ids=x,
+                labels=y,
+                attention_mask=mask,
+                context_vector=e
+            )
+            rand_e_output = model(
+                input_ids=x,
+                labels=y,
+                attention_mask=mask,
+                context_vector=rand_e
+            )
 
-        output = model(
-            input_ids=x,
-            labels=y,
-            attention_mask=mask,
-            context_vector=e
-        )
-
-        # randomise e to test if the model really does look at the vector
-        rand_e_output = model(
-            input_ids=x,
-            labels=y,
-            attention_mask=mask,
-            context_vector=rand_e
-        )
-
-        loss = output.loss
-        rand_e_loss = rand_e_output.loss
-
-        total_rand_e_loss += rand_e_loss.item()
-        total_loss += loss.item()
+        total_loss += output.loss.item()
+        total_rand_e_loss += rand_e_output.loss.item()
 
     model.train()
     return (total_loss / max(1, n)), (total_rand_e_loss / max(1, n))
