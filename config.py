@@ -19,6 +19,7 @@ GRADIENT_ACCUMULATION_STEPS = 4
 GRAD_CLIP = 1.0
 WEIGHT_DECAY = 5e-2 # nanogpt
 DTYPE=torch.bfloat16
+DTYPE_HALF=torch.bfloat16
 MAX_EVAL_TESTS=10
 
 # Hardware & Reproducibility

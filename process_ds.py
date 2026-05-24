@@ -55,7 +55,7 @@ def main():
 
         tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
 
-        embeddings = F.layer_norm(jina.embed(texts), (cfg.CONTEXT_DIM,))
+        embeddings = F.layer_norm(jina.model(texts), (cfg.CONTEXT_DIM,))
         tokenized["embeddings"] = embeddings
 
         return tokenized
