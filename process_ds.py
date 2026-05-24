@@ -2,13 +2,12 @@ import os
 import torch
 import torch.nn.functional as F
 import config as cfg
-import multiprocessing
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from jina_inference import Jina
 
-# 4 jina instances for parallel embedding extraction on GPU
-num_proc = 4
+# 8 jina instances
+num_proc = 0 # no multiple jina
 num_proc_load_dataset = 8
 
 # Global variable for lazy initialization inside worker processes
@@ -35,10 +34,6 @@ def embed_only(batch):
     return {"embeddings": embeddings.cpu().numpy()}
 
 def main():
-    try:
-        multiprocessing.set_start_method('spawn', force=True)
-    except RuntimeError:
-        pass
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
 
@@ -71,7 +66,7 @@ def main():
         fn_kwargs={"tokenizer": tokenizer, "max_text_length": cfg.MAX_TEXT_LENGTH}
     )
 
-    # 2. Parallel GPU-bound embedding extraction (using lazy Jina instantiation in workers)
+    # 2. Sequential GPU-bound embedding extraction
     tokenized = tokenized.map(
         embed_only,
         batched=True,
