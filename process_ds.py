@@ -2,6 +2,7 @@ import os
 import torch
 import torch.nn.functional as F
 import config as cfg
+import multiprocessing
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from jina_inference import Jina
@@ -34,6 +35,10 @@ def embed_only(batch):
     return {"embeddings": embeddings.cpu().numpy()}
 
 def main():
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
 
