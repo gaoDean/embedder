@@ -100,7 +100,12 @@ def train():
     if latest_cp:
         print(f"Resuming from full checkpoint: {latest_cp}")
         checkpoint = torch.load(latest_cp, map_location=cfg.DEVICE)
-        model.load_state_dict(checkpoint['model_state_dict'], strict=True)
+        
+        # In case an old compiled checkpoint is loaded
+        state_dict = checkpoint['model_state_dict']
+        uncompiled_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+                
+        model.load_state_dict(uncompiled_state_dict, strict=False)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_step = checkpoint['step'] + 1
@@ -184,10 +189,13 @@ def train():
             checkpoints.wandb_log(step, lr, avg, elapsed, best_eval, rand_el)
 
             if step > 0 and step % cfg.SAVE_ITERS == 0:
+                # Save the uncompiled model state dict to avoid _orig_mod prefix
+                model_sd = model._orig_mod.state_dict() if hasattr(model, "_orig_mod") else model.state_dict()
+                
                 checkpoint = {
                     'step': step,
                     'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': model_sd,
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scaler_state_dict': scaler.state_dict(),
                     'best_eval': best_eval
