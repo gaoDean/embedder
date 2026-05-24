@@ -19,6 +19,7 @@ def wandb_log(step, lr, loss, time, el, rand_el):
                         "train/time": time,
                         "eval/el": el,
                         "eval/rand_el": rand_el,
+                        "eval/el_real": el - rand_el,
                     }
                 )
 
