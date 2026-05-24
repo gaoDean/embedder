@@ -64,7 +64,7 @@ def main():
     tokenized = split_dataset.map(
             process,
             batched=True,
-            batch_size=128,
+            batch_size=64,
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
