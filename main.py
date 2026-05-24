@@ -75,10 +75,8 @@ def train():
     model.to(device)
     print(f"Model loaded")
 
-    # train_loader = get_dataloader(tokenizer, split="train") # TODO
-    # eval_loader = get_dataloader(tokenizer, split="validation", shuffle=False) # TODO
     train_loader = get_dataloader(tokenizer, split="train")
-    eval_loader = get_dataloader(tokenizer, split="validation", shuffle=False)
+    eval_loader = get_dataloader(tokenizer, split="test", shuffle=False)
     print(f"Train: {len(train_loader.dataset):,}, Eval: {len(eval_loader.dataset):,}")
 
     optimizer = torch.optim.AdamW(

@@ -25,63 +25,14 @@ def clean_ds_entry(entry):
     return entry
 
 class HFDataset(Dataset):
-    def __init__(self, llm_tokenizer, split="train"):
-        self.llm_tokenizer = llm_tokenizer
+    def __init__(self, split):
 
-        # Sanitize split name to keep caching distinct for each split
-        sanitized_split = re.sub(r'[^a-zA-Z0-9]', '_', split)
-        cache_dir = f"{cfg.DATASET_CACHE_DIR}_{sanitized_split}"
+        if not os.path.exists(cfg.DATASET_CACHE_DIR):
+            print("no dataset cache found")
+            return None
 
-        if os.path.exists(cache_dir):
-            print(f"Loading cached dataset from {cache_dir}...")
-            self.ds = load_from_disk(cache_dir)
-        else:
-            print("Processing dataset (no cache found) ...")
-            ds = load_dataset("openwebtext", , split=split)
-            jina = Jina()
-
-            # print(ds[0])
-            # {'article': '...', 'highlights': '...', 'id': ...}
-
-            # TESTING START
-            # print(jina.embed([clean_ds_entry(ds[0]['article'])]))
-            # print(self.llm_tokenizer([clean_ds_entry(ds[0]['article'])]))
-            # TESTING END
-
-            def dataset_map_fn(batch):
-                """
-                takes in a dataset batch
-
-                returns {
-                    "input_ids": ...,
-                    "attention_mask": ...,
-                    "embeddings": ...,
-                }
-                """
-
-
-                texts = batch["article"]
-
-                for i, entry in enumerate(texts):
-                    texts[i] = clean_ds_entry(entry)
-
-                tokenized = self.llm_tokenizer(texts, add_special_tokens=True, truncation=False)
-
-                embeddings = F.layer_norm(jina.embed(texts), (cfg.CONTEXT_DIM,))
-                tokenized["embeddings"] = embeddings
-
-                return tokenized
-
-            self.ds = ds.map(
-                dataset_map_fn,
-                batched = True,
-                load_from_cache_file=False, # llm call cant be optimised
-                num_proc = None, # because we're doing inference
-                remove_columns=ds.column_names
-            )
-
-            print(f"Saving dataset to {cache_dir} ...")
-            self.ds.save_to_disk(cache_dir)
+        print(f"Loading cached dataset from {cfg.DATASET_CACHE_DIR}...")
+        self.ds = load_from_disk(cache_dir)[split]
 
     def __getitem__(self, i):
         '''
@@ -130,7 +81,6 @@ def collate_fn(batch, pad_id=0):
         dtype=torch.long
     )
 
-    # Stack the embeddings to preserve individual context vectors for each batch item
     embedding_processed = embedding_batch[0].repeat(len(mask_batch), 1)
 
     for i, (x, y, m) in enumerate(zip(ref_toks_batch, target_toks_batch, mask_batch)):
@@ -141,12 +91,12 @@ def collate_fn(batch, pad_id=0):
     return padded_x, padded_y, padded_mask, embedding_processed
 
 def get_dataloader(tokenizer, split, shuffle=True):
-    dataset = HFDataset(tokenizer, split)
+    dataset = HFDataset(split)
     pad_id = tokenizer.pad_token_id
 
     modified_collate_fn = lambda batch: collate_fn(batch, pad_id=pad_id)
 
     return DataLoader(
         dataset, batch_size=cfg.BATCH_SIZE, shuffle=shuffle,
-        collate_fn=modified_collate_fn, num_workers=0, pin_memory=(cfg.DEVICE != "mps"),
+        collate_fn=modified_collate_fn, num_workers=cfg.DS_N_PROC, pin_memory=(cfg.DEVICE != "mps"),
     )
