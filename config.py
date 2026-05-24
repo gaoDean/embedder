@@ -31,10 +31,13 @@ COMPILE = True
 LOG_ITERS = 20
 CHECKPOINT_DIR = "checkpoints"
 WANDB_PROJECT = "Inverse embedder"
-DATASET_CACHE_DIR = "cache/dataset"
 DATALOADER_BATCHSIZE = 1
 EVAL_ITERS = 500
 SAVE_ITERS = 1000
 MAX_TEXT_LENGTH = 100 * 5 # 100 tokens
 UPLOAD_ITERS = 50000
 DS_N_PROC = 8
+
+DATASET_CACHE_DIR = "cache/dataset"
+base_dir = os.path.dirname(os.path.abspath(__file__))
+DATASET_CACHE_DIR = os.path.join(base_dir, cfg.DATASET_CACHE_DIR)
