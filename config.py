@@ -41,4 +41,4 @@ DS_N_PROC = 8
 
 DATASET_CACHE_DIR = "cache/dataset"
 base_dir = os.path.dirname(os.path.abspath(__file__))
-DATASET_CACHE_DIR = os.path.join(base_dir, cfg.DATASET_CACHE_DIR)
+DATASET_CACHE_DIR = os.path.join(base_dir, DATASET_CACHE_DIR)
