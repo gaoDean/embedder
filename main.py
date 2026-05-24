@@ -32,7 +32,7 @@ def evaluate(model, dataloader):
     total_rand_e_loss = 0
 
     # Because torch.no_grad() is a decorator, we don't need a context manager here,
-    # but when the model uses torch.compile, sometimes the autocast context is needed 
+    # but when the model uses torch.compile, sometimes the autocast context is needed
     # if it's mixed precision. Let's make sure the eval context is perfectly matching train.
     use_amp = (device == "cuda")
     amp_device = "cuda" if device == "cuda" else "mps"
@@ -115,11 +115,11 @@ def train():
     if latest_cp:
         print(f"Resuming from full checkpoint: {latest_cp}")
         checkpoint = torch.load(latest_cp, map_location=cfg.DEVICE)
-        
+
         # In case an old compiled checkpoint is loaded
         state_dict = checkpoint['model_state_dict']
         uncompiled_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-                
+
         model.load_state_dict(uncompiled_state_dict, strict=False)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
@@ -144,7 +144,8 @@ def train():
 
     for epoch in range(start_epoch, cfg.EPOCHS):
         # ref, target, mask, embedding
-        for step, (x, y, mask, e) in enumerate(train_loader, start=start_step):
+        for i, (x, y, mask, e) in enumerate(train_loader, start=start_step):
+            step = i * (epoch + 1)
             x, y, mask = x.to(device), y.to(device), mask.to(device)
             e = e.to(device)
 
@@ -207,9 +208,9 @@ def train():
             if step > 0 and step % cfg.SAVE_ITERS == 0:
                 # Save the uncompiled model state dict to avoid _orig_mod prefix
                 model_sd = model._orig_mod.state_dict() if hasattr(model, "_orig_mod") else model.state_dict()
-                
+
                 checkpoint = {
-                    'step': step,
+                    'step': i,
                     'epoch': epoch,
                     'model_state_dict': model_sd,
                     'optimizer_state_dict': optimizer.state_dict(),
