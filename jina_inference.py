@@ -10,7 +10,7 @@ class Encoder(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.tokenizer = AutoTokenizer.from_pretrained('jinaai/jina-embeddings-v5-text-small', trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(config.EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
         self.backbone = AutoModel.from_pretrained(
             cfg.EMBEDDING_MODEL_NAME,
