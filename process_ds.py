@@ -55,8 +55,9 @@ def main():
 
         tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
 
-        embeddings = F.layer_norm(jina.model(texts), (cfg.CONTEXT_DIM,))
-        tokenized["embeddings"] = embeddings
+        with torch.no_grad():
+            embeddings = F.layer_norm(jina.model(texts), (cfg.CONTEXT_DIM,))
+        tokenized["embeddings"] = embeddings.detach().cpu().numpy()
 
         return tokenized
 
