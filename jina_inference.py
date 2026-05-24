@@ -15,6 +15,7 @@ class Encoder(nn.Module):
         self.backbone = AutoModel.from_pretrained(
             cfg.EMBEDDING_MODEL_NAME,
             trust_remote_code=True,
+            torch_dtype=cfg.DTYPE,
         )
 
         # Cache pad_id to avoid checking on every forward pass
@@ -73,9 +74,9 @@ class Jina():
         '''
 
         all_embeddings = []
-        for i in range(0, len(text_arr), batch_size):
-            batch = text_arr[i : i + batch_size]
-            with torch.no_grad():
+        with torch.inference_mode():
+            for i in range(0, len(text_arr), batch_size):
+                batch = text_arr[i : i + batch_size]
                 embeddings = self.model(batch)
                 all_embeddings.append(embeddings.cpu())
 

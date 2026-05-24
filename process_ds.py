@@ -7,7 +7,7 @@ from transformers import AutoTokenizer
 from jina_inference import Jina
 
 # 8 jina instances
-num_proc = 8 # no multiple jina
+num_proc = 0 # no multiple jina
 num_proc_load_dataset = 8
 
 def main():
@@ -28,11 +28,12 @@ def main():
     # })
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
-    e_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
     if os.path.exists(cfg.DATASET_CACHE_DIR):
         print("dataset already exists")
         return None
+
+    jina = Jina()
 
     def process(batch):
         """
@@ -53,16 +54,9 @@ def main():
                 texts[i] = texts[i][:cfg.MAX_TEXT_LENGTH]
 
         tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
-        e_tokenized = e_tokenizer(
-            texts,
-            add_special_tokens=True,
-            truncation=False,
-            padding=True,
-            return_tensors="pt"
-        )
 
-        tokenized["e_input_ids"] = e_tokenized["input_ids"]
-        tokenized["e_attention_mask"] = e_tokenized["attention_mask"]
+        embeddings = F.layer_norm(jina.embed(texts), (cfg.CONTEXT_DIM,))
+        tokenized["embeddings"] = embeddings
 
         return tokenized
 
@@ -70,6 +64,7 @@ def main():
     tokenized = split_dataset.map(
             process,
             batched=True,
+            batch_size=512,
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
