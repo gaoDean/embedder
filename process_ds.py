@@ -10,29 +10,6 @@ from jina_inference import Jina
 num_proc = 0 # no multiple jina
 num_proc_load_dataset = 8
 
-# Global variable for lazy initialization inside worker processes
-jina_instance = None
-
-def tokenize_only(batch, tokenizer=None, max_text_length=None):
-    texts = batch["text"]
-
-    for i, entry in enumerate(texts):
-        if len(entry) > max_text_length:
-            texts[i] = texts[i][:max_text_length]
-
-    tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
-    tokenized["text"] = texts
-    return tokenized
-
-def embed_only(batch):
-    global jina_instance
-    if jina_instance is None:
-        jina_instance = Jina()
-    texts = batch["text"]
-    with torch.inference_mode():
-        embeddings = F.layer_norm(jina_instance.model(texts), (cfg.CONTEXT_DIM,))
-    return {"embeddings": embeddings.cpu().numpy()}
-
 def main():
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
@@ -56,25 +33,42 @@ def main():
         print("dataset already exists")
         return None
 
-    # 1. Parallel CPU-bound tokenization
-    tokenized = split_dataset.map(
-        tokenize_only,
-        batched=True,
-        batch_size=1000,
-        desc="Tokenizing dataset",
-        num_proc=num_proc_load_dataset,
-        fn_kwargs={"tokenizer": tokenizer, "max_text_length": cfg.MAX_TEXT_LENGTH}
-    )
+    jina = Jina()
 
-    # 2. Sequential GPU-bound embedding extraction
-    tokenized = tokenized.map(
-        embed_only,
-        batched=True,
-        batch_size=256,
-        remove_columns=['text'],
-        desc="Generating embeddings",
-        num_proc=num_proc,
-    )
+    def process(batch):
+        """
+        takes in a dataset batch
+
+        returns {
+            "input_ids": ...,
+            "attention_mask": ...,
+            "embeddings": ...,
+        }
+        """
+
+
+        texts = batch["text"]
+
+        for i, entry in enumerate(texts):
+            if len(entry) > cfg.MAX_TEXT_LENGTH:
+                texts[i] = texts[i][:cfg.MAX_TEXT_LENGTH]
+
+        tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
+
+        embeddings = F.layer_norm(jina.model(texts), (cfg.CONTEXT_DIM,))
+        tokenized["embeddings"] = embeddings
+
+        return tokenized
+
+    # tokenize the dataset
+    tokenized = split_dataset.map(
+            process,
+            batched=True,
+            batch_size=40,
+            remove_columns=['text'],
+            desc="processing dataset",
+            num_proc=num_proc,
+            )
 
     tokenized.save_to_disk(cfg.DATASET_CACHE_DIR)
 

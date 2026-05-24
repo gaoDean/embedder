@@ -10,17 +10,12 @@ class Encoder(nn.Module):
     def __init__(self):
         super().__init__()
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.EMBEDDING_MODEL_NAME,
-            trust_remote_code=True,
-            use_fast=True
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
         self.backbone = AutoModel.from_pretrained(
             cfg.EMBEDDING_MODEL_NAME,
             trust_remote_code=True,
             torch_dtype=cfg.DTYPE_HALF,
-            attn_implementation="sdpa"
         )
 
         # Cache pad_id to avoid checking on every forward pass
