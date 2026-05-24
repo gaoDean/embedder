@@ -64,7 +64,7 @@ def main():
     tokenized = tokenized.map(
         embed_only,
         batched=True,
-        batch_size=512,
+        batch_size=256,
         remove_columns=['text'],
         desc="Generating embeddings",
         num_proc=num_proc,

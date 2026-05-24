@@ -23,9 +23,6 @@ class Encoder(nn.Module):
         if self.pad_id is None:
             self.pad_id = getattr(self.backbone.config, 'eos_token_id', 151645)
 
-        if cfg.COMPILE:
-            self.backbone = torch.compile(self.backbone)
-
     def forward(self, text, return_tokens=False):
         '''
         return_tokens determines whether a second return value is outputted
