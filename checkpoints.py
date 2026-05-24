@@ -1,4 +1,5 @@
 import os
+import shutil
 import glob
 import hydra.utils
 import wandb
@@ -7,6 +8,9 @@ import torch
 import re
 
 def wandb_init():
+    os.environ["WANDB_DIR"] = "/tmp/wandb"
+    os.environ["WANDB_CACHE_DIR"] = "/tmp/wandb_cache"
+    os.environ["WANDB_CONFIG_DIR"] = "/tmp/wandb_config"
     wandb.init(project=cfg.WANDB_PROJECT)
 
 def wandb_log(step, lr, loss, time, el, rand_el):
@@ -50,6 +54,12 @@ def save_checkpoint(checkpoint, upload=False):
     if wandb.run is not None:
         artifact = wandb.Artifact(f"model-checkpoint-{checkpoint['epoch']}-{checkpoint['step']}", type="model")
         artifact.add_file(checkpoint_path)
-        wandb.log_artifact(artifact)
+        logged_artifact = wandb.log_artifact(artifact)
+        logged_artifact.wait()  # Block until the upload finishes
+
+        # Clean up wandb cache
+        cache_dir = os.environ.get("WANDB_CACHE_DIR", "/tmp/wandb_cache")
+        if os.path.exists(cache_dir):
+            shutil.rmtree(cache_dir, ignore_errors=True)
 
         print(f"Checkpoint uploaded to wandb for epoch {checkpoint['epoch']}")
