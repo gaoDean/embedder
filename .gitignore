@@ -9,6 +9,7 @@ __pycache__/
 
 outputs
 wandb
+.antigravitycli
 
 *.pt
 *.arrow

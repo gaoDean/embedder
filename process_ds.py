@@ -35,18 +35,7 @@ def main():
 
     jina = Jina()
 
-    def process(batch):
-        """
-        takes in a dataset batch
-
-        returns {
-            "input_ids": ...,
-            "attention_mask": ...,
-            "embeddings": ...,
-        }
-        """
-
-
+    def tokenize_only(batch):
         texts = batch["text"]
 
         for i, entry in enumerate(texts):
@@ -54,21 +43,32 @@ def main():
                 texts[i] = texts[i][:cfg.MAX_TEXT_LENGTH]
 
         tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
-
-        embeddings = F.layer_norm(jina.model(texts), (cfg.CONTEXT_DIM,))
-        tokenized["embeddings"] = embeddings
-
         return tokenized
 
-    # tokenize the dataset
+    def embed_only(batch):
+        texts = batch["text"]
+        with torch.inference_mode():
+            embeddings = F.layer_norm(jina.model(texts), (cfg.CONTEXT_DIM,))
+        return {"embeddings": embeddings.cpu().numpy()}
+
+    # 1. Parallel CPU-bound tokenization
     tokenized = split_dataset.map(
-            process,
-            batched=True,
-            batch_size=40,
-            remove_columns=['text'],
-            desc="processing dataset",
-            num_proc=num_proc,
-            )
+        tokenize_only,
+        batched=True,
+        batch_size=1000,
+        desc="Tokenizing dataset",
+        num_proc=num_proc_load_dataset,
+    )
+
+    # 2. Sequential GPU-bound embedding extraction
+    tokenized = tokenized.map(
+        embed_only,
+        batched=True,
+        batch_size=512,
+        remove_columns=['text'],
+        desc="Generating embeddings",
+        num_proc=num_proc,
+    )
 
     tokenized.save_to_disk(cfg.DATASET_CACHE_DIR)
 

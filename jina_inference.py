@@ -23,6 +23,9 @@ class Encoder(nn.Module):
         if self.pad_id is None:
             self.pad_id = getattr(self.backbone.config, 'eos_token_id', 151645)
 
+        if cfg.COMPILE:
+            self.backbone = torch.compile(self.backbone)
+
     def forward(self, text, return_tokens=False):
         '''
         return_tokens determines whether a second return value is outputted
@@ -37,24 +40,16 @@ class Encoder(nn.Module):
             return_tensors="pt"
         ).to(cfg.DEVICE)
 
-        input_ids = tokenized.input_ids.unsqueeze(1)
-        attention_mask = tokenized.attention_mask.unsqueeze(1)
-
-        N, V = input_ids.shape[:2]
-
-        # flatten N and V to process through
-        # shape becomes [N*V, Seq_Len]
-        input_ids = input_ids.flatten(0, 1)
+        input_ids = tokenized.input_ids
+        attention_mask = tokenized.attention_mask
 
         if attention_mask is None:
             attention_mask = (input_ids != self.pad_id).long()
-        else:
-            attention_mask = attention_mask.flatten(0, 1)
 
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
         # Last-token pooling
         sequence_lengths = attention_mask.sum(dim=1) - 1
-        cls_embed = outputs.last_hidden_state[torch.arange(outputs.last_hidden_state.shape[0], device=outputs.last_hidden_state.device), sequence_lengths] # shape [N*V, hidden_dim]
+        cls_embed = outputs.last_hidden_state[torch.arange(outputs.last_hidden_state.shape[0], device=outputs.last_hidden_state.device), sequence_lengths] # shape [N, hidden_dim]
 
         if return_tokens:
             decoded = [self.tokenizer.decode([token_id]) for token_id in input_ids[0]]
