@@ -32,7 +32,7 @@ class HFDataset(Dataset):
             return None
 
         print(f"Loading cached dataset from {cfg.DATASET_CACHE_DIR}...")
-        self.ds = load_from_disk(cfg.DATASET_CACHE_DIR)[split]
+        self.ds = load_from_disk(cfg.DATASET_CACHE_DIR)
 
     def __getitem__(self, i):
         '''
