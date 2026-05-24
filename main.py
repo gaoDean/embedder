@@ -67,7 +67,6 @@ def evaluate(model, dataloader):
 def train():
     device = cfg.DEVICE
 
-    torch.manual_seed(0)
 
     tokenizer, model = load_model()
     model.float()
@@ -198,6 +197,9 @@ def train():
 
 
 def main():
+    torch.manual_seed(0)
+    torch.set_float32_matmul_precision('high')
+
     train()
 
 if __name__ == "__main__":
