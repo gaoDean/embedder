@@ -51,7 +51,7 @@ def save_checkpoint(checkpoint, upload=False):
 
     print(f"Checkpoint saved for epoch {checkpoint['epoch']} step {checkpoint['step']}")
 
-    if wandb.run is not None:
+    if upload and wandb.run is not None:
         artifact = wandb.Artifact(f"model-checkpoint-{checkpoint['epoch']}-{checkpoint['step']}", type="model")
         artifact.add_file(checkpoint_path)
         logged_artifact = wandb.log_artifact(artifact)
