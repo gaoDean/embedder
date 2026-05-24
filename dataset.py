@@ -60,11 +60,9 @@ class HFDataset(Dataset):
 
 def collate_fn(batch, pad_id=0):
     ref_toks_batch, target_toks_batch, mask_batch, embedding_batch = zip(*batch)
-    max_len = max(len(entry) for entry in ref_toks_batch)
-
-    # Round max_len up to the nearest multiple of 8 to reduce the number of unique tensor shapes.
-    # This prevents the MPS backend on Apple Silicon from constantly compiling new execution graphs.
-    max_len = ((max_len + 7) // 8) * 8
+    
+    # Fixed sequence length to prevent torch.compile recompilations
+    max_len = 100
 
     padded_x = torch.full(
         (len(ref_toks_batch), max_len),
@@ -84,9 +82,14 @@ def collate_fn(batch, pad_id=0):
     embedding_processed = embedding_batch[0].repeat(len(mask_batch), 1)
 
     for i, (x, y, m) in enumerate(zip(ref_toks_batch, target_toks_batch, mask_batch)):
-        padded_x[i, :len(x)] = x
-        padded_y[i, :len(y)] = y
-        padded_mask[i, :len(m)] = m
+        # Truncate if longer than max_len
+        x_trunc = x[:max_len]
+        y_trunc = y[:max_len]
+        m_trunc = m[:max_len]
+        
+        padded_x[i, :len(x_trunc)] = x_trunc
+        padded_y[i, :len(y_trunc)] = y_trunc
+        padded_mask[i, :len(m_trunc)] = m_trunc
 
     return padded_x, padded_y, padded_mask, embedding_processed
 
