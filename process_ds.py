@@ -21,6 +21,7 @@ def tokenize_only(batch, tokenizer=None, max_text_length=None):
             texts[i] = texts[i][:max_text_length]
 
     tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
+    tokenized["text"] = texts
     return tokenized
 
 def embed_only(batch):
