@@ -6,9 +6,31 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from jina_inference import Jina
 
-# 8 jina instances
-num_proc = 0 # no multiple jina
+# 4 jina instances for parallel embedding extraction on GPU
+num_proc = 4
 num_proc_load_dataset = 8
+
+# Global variable for lazy initialization inside worker processes
+jina_instance = None
+
+def tokenize_only(batch, tokenizer=None, max_text_length=None):
+    texts = batch["text"]
+
+    for i, entry in enumerate(texts):
+        if len(entry) > max_text_length:
+            texts[i] = texts[i][:max_text_length]
+
+    tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
+    return tokenized
+
+def embed_only(batch):
+    global jina_instance
+    if jina_instance is None:
+        jina_instance = Jina()
+    texts = batch["text"]
+    with torch.inference_mode():
+        embeddings = F.layer_norm(jina_instance.model(texts), (cfg.CONTEXT_DIM,))
+    return {"embeddings": embeddings.cpu().numpy()}
 
 def main():
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
@@ -33,24 +55,6 @@ def main():
         print("dataset already exists")
         return None
 
-    jina = Jina()
-
-    def tokenize_only(batch):
-        texts = batch["text"]
-
-        for i, entry in enumerate(texts):
-            if len(entry) > cfg.MAX_TEXT_LENGTH:
-                texts[i] = texts[i][:cfg.MAX_TEXT_LENGTH]
-
-        tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
-        return tokenized
-
-    def embed_only(batch):
-        texts = batch["text"]
-        with torch.inference_mode():
-            embeddings = F.layer_norm(jina.model(texts), (cfg.CONTEXT_DIM,))
-        return {"embeddings": embeddings.cpu().numpy()}
-
     # 1. Parallel CPU-bound tokenization
     tokenized = split_dataset.map(
         tokenize_only,
@@ -58,9 +62,10 @@ def main():
         batch_size=1000,
         desc="Tokenizing dataset",
         num_proc=num_proc_load_dataset,
+        fn_kwargs={"tokenizer": tokenizer, "max_text_length": cfg.MAX_TEXT_LENGTH}
     )
 
-    # 2. Sequential GPU-bound embedding extraction
+    # 2. Parallel GPU-bound embedding extraction (using lazy Jina instantiation in workers)
     tokenized = tokenized.map(
         embed_only,
         batched=True,
