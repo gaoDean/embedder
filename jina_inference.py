@@ -67,4 +67,4 @@ class Jina():
         self.model = Encoder().to(cfg.DEVICE)
         self.model.eval()
         if getattr(cfg, 'COMPILE', False):
-            self.model.backbone = torch.compile(self.model.backbone, dynamic=True)
+            self.model.backbone = torch.compile(self.model.backbone)

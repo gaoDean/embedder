@@ -39,3 +39,4 @@ TRUNC_LENGTH = 15 # tokens, approx one sentence
 MAX_CHARS_TRUNC = 180 # chars, approx 30 words or two sentences
 UPLOAD_ITERS = 50000
 DS_N_PROC = 8
+DS_PROCESS_BATCH = 256

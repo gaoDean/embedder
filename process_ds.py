@@ -50,6 +50,8 @@ def main():
 
     jina = Jina()
 
+    portions_buffer = []
+
     def process(batch):
         """
         takes in a dataset batch
@@ -64,29 +66,45 @@ def main():
 
         unprocessed_texts = batch["text"]
 
-        portions_batch = []
-
         # the idea is that we split the paragraphs into "portions"
         # which are each one to two sentences long
         # so we can make better use of our dataset
         for text in unprocessed_texts:
             portions = get_portions(text, cfg.MAX_CHARS_TRUNC)
             for portion in portions:
-                portions_batch.append(portion)
+                portions_buffer.append(portion)
 
-        tokenized = tokenizer(portions_batch, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.TRUNC_LENGTH)
+        # number of batches available to process
+        # lets say buffer reaches a length of 40, if DS_PROCESS_BATCH is 30, then we can process 30 entries
+        # this is to keep batch size constant to take advantage of compilation
+        num_portions_batches = len(portions_buffer) // cfg.DS_PROCESS_BATCH
+        output = None
+        if num_portions_batches >= 1:
+            for i in range(num_portions_batches):
+                # pop the processable batches
+                to_process = batches_buffer[:cfg.DS_PROCESS_BATCH]
+                batches_buffer = batches_buffer[cfg.DS_PROCESS_BATCH:]
 
-        with torch.no_grad():
-            embeddings = F.layer_norm(jina.model(portions_batch, cfg.TRUNC_LENGTH), (cfg.CONTEXT_DIM,))
-        tokenized["embeddings"] = embeddings.detach().cpu().numpy()
+                tokenized = tokenizer(to_process, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.TRUNC_LENGTH)
 
-        return tokenized
+                embeddings = None
+                with torch.no_grad():
+                    embeddings = F.layer_norm(jina.model(to_process, cfg.TRUNC_LENGTH), (cfg.CONTEXT_DIM,))
+                tokenized["embeddings"] = embeddings.detach().cpu().numpy().tolist()
+
+                # merge output with the tokenized dict
+                if output is None:
+                    output = tokenized
+                else:
+                    output = {key: output[key] + tokenized[key] for key in tokenized}
+
+        return output
 
     # tokenize the dataset
     tokenized = split_dataset.map(
             process,
             batched=True,
-            batch_size=40,
+            batch_size=cfg.DS_PROCESS_BATCH,
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
