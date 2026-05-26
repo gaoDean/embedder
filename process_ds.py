@@ -74,16 +74,18 @@ def main():
             for portion in portions:
                 portions_buffer.append(portion)
 
-        # number of batches available to process
-        # lets say buffer reaches a length of 40, if DS_PROCESS_BATCH is 30, then we can process 30 entries
+        # number of portions available to process
+        # lets say buffer reaches a length of 40, if DS_PROCESS_BATCH is 30, then we can process 30 portions
+        # if buffer reaches length of 80, we can process 30 + 30 portions sequentially
         # this is to keep batch size constant to take advantage of compilation
         num_portions_batches = len(portions_buffer) // cfg.DS_PROCESS_BATCH
         output = None
         if num_portions_batches >= 1:
             for i in range(num_portions_batches):
-                # pop the processable batches
-                to_process = batches_buffer[:cfg.DS_PROCESS_BATCH]
-                batches_buffer = batches_buffer[cfg.DS_PROCESS_BATCH:]
+
+                # pop the processable portions e.g. pop the first 30 entires
+                to_process = portions_buffer[:cfg.DS_PROCESS_BATCH]
+                portions_buffer = portions_buffer[cfg.DS_PROCESS_BATCH:]
 
                 tokenized = tokenizer(to_process, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.TRUNC_LENGTH)
 
