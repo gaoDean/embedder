@@ -72,9 +72,8 @@ def main():
 
         for text in unprocessed_texts:
             portions = get_portions(text, cfg.MAX_CHARS_TRUNC)
-            portions_batch.append(portions)
-
-            del portions
+            for portion in portions:
+                portions_batch.append(portion)
 
         tokenized = tokenizer(portions_batch, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.TRUNC_LENGTH)
 
