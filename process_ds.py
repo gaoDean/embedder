@@ -120,4 +120,5 @@ def main():
     # val has ~4M tokens (4,434,897)
 
 if __name__ == '__main__':
+    torch.set_float32_matmul_precision('high')
     main()
