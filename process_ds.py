@@ -101,6 +101,12 @@ def main():
                 else:
                     output = {key: output[key] + tokenized[key] for key in tokenized}
 
+        if output is None:
+            # Hugging Face map requires a dictionary with correct keys and empty lists
+            # to avoid silently reverting/ignoring the whole mapping process
+            output = {key: [] for key in tokenizer([""], max_length=cfg.TRUNC_LENGTH).keys()}
+            output["embeddings"] = []
+
         return output
 
     # tokenize the dataset
