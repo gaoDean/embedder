@@ -6,11 +6,13 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from jina_inference import Jina
 
-# Set num_proc to number of GPUs if available, else fallback to config
-if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-    num_proc = torch.cuda.device_count()
-else:
-    num_proc = getattr(cfg, 'DS_N_PROC', 8)
+# Set num_proc back to config (default 8) to have multiple workers per GPU.
+# CPU tokenization and pickling is the bottleneck, not the GPUs!
+num_proc = getattr(cfg, 'DS_N_PROC', 8)
+
+# Disable CPU parallelism in workers to prevent thread trashing across multiple processes
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+torch.set_num_threads(1)
 num_proc_load_dataset = 8
 
 portions_buffer = []
