@@ -62,7 +62,7 @@ def main():
             "embeddings": ...,
         }
         """
-        global portions_buffer
+        nonlocal portions_buffer # reference the portions buffer immediately outside this func
 
 
         unprocessed_texts = batch["text"]
