@@ -66,3 +66,5 @@ class Jina():
     def __init__(self):
         self.model = Encoder().to(cfg.DEVICE)
         self.model.eval()
+        if getattr(cfg, 'COMPILE', False):
+            self.model = torch.compile(self.model)
