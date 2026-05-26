@@ -69,7 +69,6 @@ def main():
         # the idea is that we split the paragraphs into "portions"
         # which are each one to two sentences long
         # so we can make better use of our dataset
-
         for text in unprocessed_texts:
             portions = get_portions(text, cfg.MAX_CHARS_TRUNC)
             for portion in portions:

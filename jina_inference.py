@@ -60,11 +60,6 @@ class Encoder(nn.Module):
         sequence_lengths = attention_mask.sum(dim=1) - 1
         cls_embed = outputs.last_hidden_state[torch.arange(outputs.last_hidden_state.shape[0], device=outputs.last_hidden_state.device), sequence_lengths] # shape [N, hidden_dim]
 
-        if return_tokens:
-            decoded = [self.tokenizer.decode([token_id]) for token_id in input_ids[0]]
-
-            return cls_embed, decoded
-
         return cls_embed
 
 class Jina():
