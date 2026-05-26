@@ -10,6 +10,8 @@ from jina_inference import Jina
 num_proc = 0 # no multiple jina
 num_proc_load_dataset = 8
 
+portions_buffer = []
+
 def get_portions(paragraph, portion_length):
 
     portions = []
@@ -50,8 +52,6 @@ def main():
 
     jina = Jina()
 
-    portions_buffer = []
-
     def process(batch):
         """
         takes in a dataset batch
@@ -62,7 +62,7 @@ def main():
             "embeddings": ...,
         }
         """
-        nonlocal portions_buffer # reference the portions buffer immediately outside this func
+        global portions_buffer
 
 
         unprocessed_texts = batch["text"]
