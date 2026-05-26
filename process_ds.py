@@ -10,6 +10,21 @@ from jina_inference import Jina
 num_proc = 0 # no multiple jina
 num_proc_load_dataset = 8
 
+def get_portions(paragraph, portion_length):
+
+    portions = []
+
+    for i in range(1, len(paragraph) // portion_length, 1):
+        cur = paragraph[(i - 1) * portion_length : i * portion_length]
+        splits = cur.split(" ")
+
+        # everything except the first and last word since they might be cut off from the portioning
+        processed = " ".join(splits[1:-1])
+
+        portions.append(processed)
+
+    return portions
+
 def main():
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
@@ -47,16 +62,24 @@ def main():
         """
 
 
-        texts = batch["text"]
+        unprocessed_texts = batch["text"]
 
-        for i, entry in enumerate(texts):
-            if len(entry) > cfg.MAX_TEXT_LENGTH:
-                texts[i] = texts[i][:cfg.MAX_TEXT_LENGTH]
+        portions_batch = []
 
-        tokenized = tokenizer(texts, add_special_tokens=True, truncation=False)
+        # the idea is that we split the paragraphs into "portions"
+        # which are each one to two sentences long
+        # so we can make better use of our dataset
+
+        for text in unprocessed_texts:
+            portions = get_portions(text, cfg.MAX_CHARS_TRUNC)
+            portions_batch.append(portions)
+
+            del portions
+
+        tokenized = tokenizer(portions_batch, add_special_tokens=True, truncation=True, padding=cfg.TRUNC_LENGTH, max_length=cfg.TRUNC_LENGTH)
 
         with torch.no_grad():
-            embeddings = F.layer_norm(jina.model(texts), (cfg.CONTEXT_DIM,))
+            embeddings = F.layer_norm(jina.model(portions_batch, cfg.TRUNC_LENGTH), (cfg.CONTEXT_DIM,))
         tokenized["embeddings"] = embeddings.detach().cpu().numpy()
 
         return tokenized
