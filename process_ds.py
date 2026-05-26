@@ -7,10 +7,11 @@ from transformers import AutoTokenizer
 from jina_inference import Jina
 
 # 8 jina instances
-num_proc = 0 # no multiple jina
+num_proc = getattr(cfg, 'DS_N_PROC', 8)
 num_proc_load_dataset = 8
 
 portions_buffer = []
+jina = None
 
 def get_portions(paragraph, portion_length):
 
@@ -50,9 +51,7 @@ def main():
         print("dataset already exists")
         return None
 
-    jina = Jina()
-
-    def process(batch):
+    def process(batch, rank=0):
         """
         takes in a dataset batch
 
@@ -63,7 +62,14 @@ def main():
         }
         """
         global portions_buffer
+        global jina
 
+        if jina is None:
+            if torch.cuda.is_available():
+                device = f"cuda:{rank % torch.cuda.device_count()}"
+            else:
+                device = cfg.DEVICE
+            jina = Jina(device=device)
 
         unprocessed_texts = batch["text"]
 
@@ -117,6 +123,7 @@ def main():
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
+            with_rank=True,
             )
 
     tokenized.save_to_disk(cfg.DATASET_CACHE_DIR)

@@ -7,8 +7,9 @@ import config as cfg
 
 
 class Encoder(nn.Module):
-    def __init__(self):
+    def __init__(self, device=None):
         super().__init__()
+        self.device = device if device is not None else cfg.DEVICE
 
         self.tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
@@ -39,7 +40,7 @@ class Encoder(nn.Module):
                 padding="max_length",
                 max_length=trunc_length,
                 return_tensors="pt"
-            ).to(cfg.DEVICE)
+            ).to(self.device)
         else:
             tokenized = self.tokenizer(
                 text,
@@ -47,7 +48,7 @@ class Encoder(nn.Module):
                 truncation=False,
                 padding=True,
                 return_tensors="pt"
-            ).to(cfg.DEVICE)
+            ).to(self.device)
 
         input_ids = tokenized.input_ids
         attention_mask = tokenized.attention_mask
@@ -63,8 +64,9 @@ class Encoder(nn.Module):
         return cls_embed
 
 class Jina():
-    def __init__(self):
-        self.model = Encoder().to(cfg.DEVICE)
+    def __init__(self, device=None):
+        self.device = device if device is not None else cfg.DEVICE
+        self.model = Encoder(device=self.device).to(self.device)
         self.model.eval()
         if getattr(cfg, 'COMPILE', False):
             self.model.backbone = torch.compile(self.model.backbone)
