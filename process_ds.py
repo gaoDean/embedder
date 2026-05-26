@@ -76,7 +76,7 @@ def main():
 
             del portions
 
-        tokenized = tokenizer(portions_batch, add_special_tokens=True, truncation=True, padding=cfg.TRUNC_LENGTH, max_length=cfg.TRUNC_LENGTH)
+        tokenized = tokenizer(portions_batch, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.TRUNC_LENGTH)
 
         with torch.no_grad():
             embeddings = F.layer_norm(jina.model(portions_batch, cfg.TRUNC_LENGTH), (cfg.CONTEXT_DIM,))

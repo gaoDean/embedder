@@ -36,7 +36,7 @@ class Encoder(nn.Module):
                 text,
                 add_special_tokens=True,
                 truncation=True,
-                padding=trunc_length,
+                padding="max_length",
                 max_length=trunc_length,
                 return_tensors="pt"
             ).to(cfg.DEVICE)
