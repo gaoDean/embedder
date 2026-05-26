@@ -62,6 +62,7 @@ def main():
             "embeddings": ...,
         }
         """
+        global portions_buffer
 
 
         unprocessed_texts = batch["text"]
