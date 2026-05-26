@@ -115,6 +115,14 @@ def main():
 
     tokenized.save_to_disk(cfg.DATASET_CACHE_DIR)
 
+    from huggingface_hub import HfApi
+    api = HfApi()
+    api.upload_folder(
+        folder_path=cfg.DATASET_CACHE_DIR,
+        repo_id="gaodean/openwebtext-jina",
+        repo_type="dataset",
+    )
+
     # train.bin is ~17GB, val.bin ~8.5MB
     # train has ~9B tokens (9,035,582,198)
     # val has ~4M tokens (4,434,897)
