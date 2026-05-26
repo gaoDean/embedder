@@ -23,19 +23,31 @@ class Encoder(nn.Module):
         if self.pad_id is None:
             self.pad_id = getattr(self.backbone.config, 'eos_token_id', 151645)
 
-    def forward(self, text, return_tokens=False):
+    def forward(self, text, trunc_length=None):
         '''
         return_tokens determines whether a second return value is outputted
         an array of tokenized strings.
         '''
 
-        tokenized = self.tokenizer(
-            text,
-            add_special_tokens=True,
-            truncation=False,
-            padding=True,
-            return_tensors="pt"
-        ).to(cfg.DEVICE)
+
+        tokenized = None
+        if trunc_length:
+            tokenized = self.tokenizer(
+                text,
+                add_special_tokens=True,
+                truncation=True,
+                padding=trunc_length,
+                max_length=trunc_length,
+                return_tensors="pt"
+            ).to(cfg.DEVICE)
+        else:
+            tokenized = self.tokenizer(
+                text,
+                add_special_tokens=True,
+                truncation=False,
+                padding=True,
+                return_tensors="pt"
+            ).to(cfg.DEVICE)
 
         input_ids = tokenized.input_ids
         attention_mask = tokenized.attention_mask
