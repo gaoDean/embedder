@@ -61,35 +61,19 @@ class HFDataset(Dataset):
 def collate_fn(batch, pad_id=0):
     ref_toks_batch, target_toks_batch, mask_batch, embedding_batch = zip(*batch)
     
-    # Fixed sequence length to prevent torch.compile recompilations
-    max_len = 100
+    # Since process_ds.py already pads/truncates everything to exactly 15 tokens 
+    # (cfg.TRUNC_LENGTH), all items in the batch are already perfectly sized to length 14.
+    # We can just stack them directly!
+    padded_x = torch.stack(ref_toks_batch)
+    padded_y = torch.stack(target_toks_batch)
+    padded_mask = torch.stack(mask_batch)
+    
+    # Fix the embedding broadcast bug: stack the unique embeddings for the batch
+    embedding_processed = torch.stack(embedding_batch)
 
-    padded_x = torch.full(
-        (len(ref_toks_batch), max_len),
-        pad_id,
-        dtype=torch.long
-    )
-    padded_y = torch.full(
-        (len(target_toks_batch), max_len),
-        -100, # ignore padding tokens when calculating cross entropy loss
-        dtype=torch.long
-    )
-    padded_mask = torch.zeros(
-        (len(mask_batch), max_len),
-        dtype=torch.long
-    )
-
-    embedding_processed = embedding_batch[0].repeat(len(mask_batch), 1)
-
-    for i, (x, y, m) in enumerate(zip(ref_toks_batch, target_toks_batch, mask_batch)):
-        # Truncate if longer than max_len
-        x_trunc = x[:max_len]
-        y_trunc = y[:max_len]
-        m_trunc = m[:max_len]
-        
-        padded_x[i, :len(x_trunc)] = x_trunc
-        padded_y[i, :len(y_trunc)] = y_trunc
-        padded_mask[i, :len(m_trunc)] = m_trunc
+    # Replace the tokenizer's padding tokens in the target with -100 
+    # so CrossEntropyLoss correctly ignores them during training
+    padded_y[padded_y == pad_id] = -100
 
     return padded_x, padded_y, padded_mask, embedding_processed
 

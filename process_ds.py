@@ -22,7 +22,7 @@ def get_portions(paragraph, portion_length):
 
     portions = []
 
-    for i in range(1, len(paragraph) // portion_length, 1):
+    for i in range(1, (len(paragraph) // portion_length) + 1, 1):
         cur = paragraph[(i - 1) * portion_length : i * portion_length]
         splits = cur.split(" ")
 
@@ -104,7 +104,11 @@ def main():
                 embeddings = None
                 with torch.no_grad():
                     embeddings = F.layer_norm(jina.model(to_process, cfg.TRUNC_LENGTH), (cfg.CONTEXT_DIM,))
-                tokenized["embeddings"] = embeddings.detach().cpu().numpy().tolist()
+                
+                # Cast to float16 and convert to a list of numpy arrays.
+                # This prevents python's .tolist() from upcasting everything to 64-bit float objects,
+                # which would cause the Hugging Face dataset to consume 4x more disk space.
+                tokenized["embeddings"] = list(embeddings.detach().cpu().to(torch.float16).numpy())
 
                 # merge output with the tokenized dict
                 if output is None:
