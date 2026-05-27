@@ -4,7 +4,7 @@ import subprocess
 import os
 
 # Configuration
-TARGET_RATIO = 230
+TARGET_RATIO = 210
 MAX_TFLOPS = 90
 MIN_TFLOPS = 20
 TARGET_DISK_SIZE = 200 # GB
