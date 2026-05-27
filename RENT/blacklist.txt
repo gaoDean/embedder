@@ -1,0 +1,10 @@
+# Vast.ai Blacklist
+# Add machine IDs here (one per line) that you want the script to ignore.
+# For example:
+# 12345
+# 67890
+94200
+85323
+187467
+155386
+155385

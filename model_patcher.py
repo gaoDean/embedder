@@ -33,7 +33,7 @@ def load_model(model_name=cfg.MODEL_NAME, context_dim=cfg.CONTEXT_DIM):
         layer.attention.register_forward_hook(attention_forward_hook)
 
     def model_pre_hook(module, args, kwargs):
-        context_vector = kwargs.pop("context_vector", None)
+        context_vector = kwargs.pop("context_vector", getattr(module, "_current_context_vector", None))
 
         if kwargs.get("input_ids") is None and kwargs.get("inputs_embeds") is None and context_vector is not None:
             batch_size = context_vector.shape[0]
@@ -53,5 +53,19 @@ def load_model(model_name=cfg.MODEL_NAME, context_dim=cfg.CONTEXT_DIM):
 
     model.register_forward_pre_hook(model_pre_hook, with_kwargs=True)
     model.register_forward_hook(model_post_hook)
+
+    original_generate = model.generate
+
+    def generate_with_context(*args, **kwargs):
+        context_vector = kwargs.pop("context_vector", None)
+        if context_vector is not None:
+            model._current_context_vector = context_vector
+        try:
+            return original_generate(*args, **kwargs)
+        finally:
+            if hasattr(model, "_current_context_vector"):
+                delattr(model, "_current_context_vector")
+
+    model.generate = generate_with_context
 
     return tokenizer, model
