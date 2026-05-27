@@ -190,8 +190,7 @@ def train():
                 avg = sum(losses[-100:]) / len(losses[-100:])
                 elapsed = time.time() - t0
                 # On macOS, ru_maxrss is in bytes. Convert to MB.
-                mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
-                print(f"{step:6d} | {lr:10.6f} | {avg:10.4f} | {'--':>10} | {elapsed:7.1f}s | Mem: {mem_mb:.1f} MB")
+                print(f"{step:6d} | {lr:10.6f} | {avg:10.4f} | {'--':>10} | {elapsed:7.1f}s ")
 
             if step > 0 and step % cfg.EVAL_ITERS == 0:
                 el, rand_el = evaluate(model, eval_loader)

@@ -10,6 +10,7 @@ import re
 def wandb_init():
     os.environ["WANDB_DIR"] = "/tmp/wandb"
     os.environ["WANDB_CACHE_DIR"] = "/tmp/wandb_cache"
+    os.environ["WANDB_DATA_DIR"] = "/tmp/wandb_data"
     os.environ["WANDB_CONFIG_DIR"] = "/tmp/wandb_config"
     wandb.init(project=cfg.WANDB_PROJECT)
 
@@ -54,12 +55,14 @@ def save_checkpoint(checkpoint, upload=False):
     if upload and wandb.run is not None:
         artifact = wandb.Artifact(f"model-checkpoint-{checkpoint['epoch']}-{checkpoint['step']}", type="model")
         artifact.add_file(checkpoint_path)
+        
         logged_artifact = wandb.log_artifact(artifact)
         logged_artifact.wait()  # Block until the upload finishes
 
-        # Clean up wandb cache
-        cache_dir = os.environ.get("WANDB_CACHE_DIR", "/tmp/wandb_cache")
-        if os.path.exists(cache_dir):
-            shutil.rmtree(cache_dir, ignore_errors=True)
+        # Clean up wandb caches (both download cache and staging data cache)
+        for cache_env in ["WANDB_CACHE_DIR", "WANDB_DATA_DIR"]:
+            cache_dir = os.environ.get(cache_env)
+            if cache_dir and os.path.exists(cache_dir):
+                shutil.rmtree(cache_dir, ignore_errors=True)
 
         print(f"Checkpoint uploaded to wandb for epoch {checkpoint['epoch']}")
