@@ -4,9 +4,9 @@ import subprocess
 import os
 
 # Configuration
-TARGET_RATIO = 210
+TARGET_RATIO = 170
 MAX_TFLOPS = 90
-MIN_TFLOPS = 20
+MIN_TFLOPS = 70
 TARGET_DISK_SIZE = 200 # GB
 CHECK_INTERVAL_SECONDS = 0.1
 
@@ -32,10 +32,11 @@ def check_instances():
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Querying Vast.ai API...")
 
         # Run the vastai CLI search command
-        # The filter 'verified=True' is applied. We request raw JSON output.
+        # The filter 'verified=any' is applied. We request raw JSON output.
         result = subprocess.check_output(
             # ["vastai", "search", "offers", "verified=True", "--raw"],
-            ["vastai", "search", "offers", f"num_gpus=1 reliability > 0.99 rented=False verified=False disk_space >= {TARGET_DISK_SIZE}", "--raw"],
+            ["vastai", "search", "offers", f"num_gpus=1 reliability > 0.99 rented=False verified=any disk_space >= {TARGET_DISK_SIZE}", "--raw"],
+            # ["vastai", "search", "offers", f"num_gpus=1 reliability > 0.99 rented=False verified=True disk_space >= {TARGET_DISK_SIZE}", "--raw"],
             text=True
         )
 
