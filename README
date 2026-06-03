@@ -2,3 +2,5 @@
 have a "bank" of embeddings
 
 that when a request is sent, you can pull "ideas" from the bank to insert into context
+
+f
