@@ -1,9 +1,8 @@
 import torch
 
 # Model Configuration
-MODEL_NAME = "EleutherAI/pythia-70m-deduped"
+MODEL_NAME = "Qwen/Qwen2.5-0.5B"
 EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v5-text-nano"
-# MODEL_NAME = "EleutherAI/pythia-160m"
 CONTEXT_DIM = 768
 HIDDEN_SIZE = None  # Will be retrieved from model config if None
 WANDB_EN = True
@@ -40,3 +39,4 @@ MAX_CHARS_TRUNC = 180 # chars, approx 30 words or two sentences
 UPLOAD_ITERS = 50000
 DS_N_PROC = 8
 DS_PROCESS_BATCH = 256
+CHUNK_SIZE = 30 # approx 1-2 sentences

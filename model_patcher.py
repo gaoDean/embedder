@@ -12,14 +12,16 @@ def load_model(model_name=cfg.MODEL_NAME, context_dim=cfg.CONTEXT_DIM):
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(model_name)
 
+    print(model)
+
     hidden_size = model.config.hidden_size
 
-    for layer in model.gpt_neox.layers:
+    for layer in model.model.layers:
         cross_attn = CrossAttention(hidden_size, context_dim)
         cross_attn.to(device=model.device)
 
-        layer.attention.add_module("cross_attention", cross_attn)
-        layer.attention.context_vector = None
+        layer.self_attn.add_module("cross_attention", cross_attn)
+        layer.self_attn.context_vector = None
 
         def attention_forward_hook(module, args, output):
             attn_output = output[0]
@@ -30,7 +32,7 @@ def load_model(model_name=cfg.MODEL_NAME, context_dim=cfg.CONTEXT_DIM):
 
             return (attn_output,) + output[1:]
 
-        layer.attention.register_forward_hook(attention_forward_hook)
+        layer.self_attn.register_forward_hook(attention_forward_hook)
 
     def model_pre_hook(module, args, kwargs):
         context_vector = kwargs.pop("context_vector", getattr(module, "_current_context_vector", None))
@@ -41,14 +43,14 @@ def load_model(model_name=cfg.MODEL_NAME, context_dim=cfg.CONTEXT_DIM):
             kwargs["input_ids"] = torch.zeros((batch_size, 1), dtype=torch.long, device=device)
 
         if context_vector is not None:
-            for layer in module.gpt_neox.layers:
-                layer.attention.context_vector = context_vector
+            for layer in module.model.layers:
+                layer.self_attn.context_vector = context_vector
 
         return args, kwargs
 
     def model_post_hook(module, args, output):
-        for layer in module.gpt_neox.layers:
-            layer.attention.context_vector = None
+        for layer in module.model.layers:
+            layer.self_attn.context_vector = None
         return output
 
     model.register_forward_pre_hook(model_pre_hook, with_kwargs=True)

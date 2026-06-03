@@ -85,6 +85,7 @@ def train():
 
     tokenizer, model = load_model()
     model.float()
+    print(model)
 
     model.to(device)
     print(f"Model loaded")

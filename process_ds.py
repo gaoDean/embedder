@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import config as cfg
 from datasets import load_dataset
 from transformers import AutoTokenizer
+import semchunk
 from jina_inference import Jina
 
 # Set num_proc back to config (default 8) to have multiple workers per GPU.
@@ -17,21 +18,7 @@ num_proc_load_dataset = 8
 
 portions_buffer = []
 jina = None
-
-def get_portions(paragraph, portion_length):
-
-    portions = []
-
-    for i in range(1, (len(paragraph) // portion_length) + 1, 1):
-        cur = paragraph[(i - 1) * portion_length : i * portion_length]
-        splits = cur.split(" ")
-
-        # everything except the first and last word since they might be cut off from the portioning
-        processed = " ".join(splits[1:-1])
-
-        portions.append(processed)
-
-    return portions
+chunker = None
 
 def main():
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
@@ -68,23 +55,38 @@ def main():
         """
         global portions_buffer
         global jina
+        global chunker
 
         if jina is None:
             if torch.cuda.is_available():
                 device = f"cuda:{rank % torch.cuda.device_count()}"
             else:
                 device = cfg.DEVICE
+            torch.set_float32_matmul_precision('high')
             jina = Jina(device=device)
 
-        unprocessed_texts = batch["text"]
+        if chunker is None:
+            if torch.cuda.is_available():
+
+                device = f"cuda:{rank % torch.cuda.device_count()}"
+            else:
+                device = cfg.DEVICE
+
+            chunker = semchunk.chunkerify(tokenizer, cfg.CHUNK_SIZE)
+
+
+        # lists of texts, of len batch
+        texts = batch["text"]
+
+        # list of lists, of shape (batch, n_chunks unknown)
+        chunks = chunker(texts)
 
         # the idea is that we split the paragraphs into "portions"
         # which are each one to two sentences long
         # so we can make better use of our dataset
-        for text in unprocessed_texts:
-            portions = get_portions(text, cfg.MAX_CHARS_TRUNC)
-            for portion in portions:
-                portions_buffer.append(portion)
+        for batch in chunks:
+            for chunk in batch:
+                portions_buffer.append(chunk)
 
         # number of portions available to process
         # lets say buffer reaches a length of 40, if DS_PROCESS_BATCH is 30, then we can process 30 portions
@@ -99,12 +101,12 @@ def main():
                 to_process = portions_buffer[:cfg.DS_PROCESS_BATCH]
                 portions_buffer = portions_buffer[cfg.DS_PROCESS_BATCH:]
 
-                tokenized = tokenizer(to_process, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.TRUNC_LENGTH)
+                tokenized = tokenizer(to_process, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
 
                 embeddings = None
                 with torch.no_grad():
-                    embeddings = F.layer_norm(jina.model(to_process, cfg.TRUNC_LENGTH), (cfg.CONTEXT_DIM,))
-                
+                    embeddings = F.layer_norm(jina.model(to_process, cfg.CHUNK_SIZE), (cfg.CONTEXT_DIM,))
+
                 # Cast to float16 and convert to a list of numpy arrays.
                 # This prevents python's .tolist() from upcasting everything to 64-bit float objects,
                 # which would cause the Hugging Face dataset to consume 4x more disk space.
