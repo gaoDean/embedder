@@ -71,6 +71,12 @@ def main():
         # Cast BatchEncoding to a standard dict to prevent Rust Encoding object memory leaks
         return dict(tokenized)
 
+    os.makedirs(cfg.DATASET_CACHE_DIR, exist_ok=True)
+    cache_file_names = {
+        split: os.path.join(cfg.DATASET_CACHE_DIR, f"{split}_processed.arrow")
+        for split in split_dataset.keys()
+    }
+
     # tokenize the dataset
     tokenized = split_dataset.map(
             process,
@@ -79,6 +85,7 @@ def main():
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
+            cache_file_names=cache_file_names,
             )
 
     tokenized.save_to_disk(cfg.DATASET_CACHE_DIR)
