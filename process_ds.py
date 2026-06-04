@@ -55,15 +55,16 @@ def main():
             "e_attention_mask": ...,
         }
         """
-        global _worker_tokenizer, _worker_jina_tokenizer, _worker_chunker
+        global _worker_tokenizer, _worker_jina_tokenizer
         if _worker_tokenizer is None:
             _worker_tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
             _worker_jina_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
-            _worker_chunker = semchunk.chunkerify(_worker_tokenizer, cfg.CHUNK_SIZE)
 
-        chunker = _worker_chunker
         tokenizer = _worker_tokenizer
         jina_tokenizer = _worker_jina_tokenizer
+        
+        # Instantiate chunker per batch to avoid unbounded internal caching across batches
+        chunker = semchunk.chunkerify(tokenizer, cfg.CHUNK_SIZE)
 
         # lists of texts, of len batch
         texts = batch["text"]
@@ -74,13 +75,22 @@ def main():
         # flatten the list of lists into a single list of strings
         chunks = [chunk for doc_chunks in chunks_nested for chunk in doc_chunks]
 
-        tokenized = tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
-        jina_tokenized = jina_tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
+        # Use return_tensors="np" to avoid creating millions of tiny Python lists
+        tokenized = tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE, return_tensors="np")
+        jina_tokenized = jina_tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE, return_tensors="np")
 
-        tokenized["e_input_ids"] = jina_tokenized["input_ids"]
-        tokenized["e_attention_mask"] = jina_tokenized["attention_mask"]
-
-        return tokenized
+        out = {
+            "input_ids": tokenized["input_ids"],
+            "attention_mask": tokenized["attention_mask"],
+            "e_input_ids": jina_tokenized["input_ids"],
+            "e_attention_mask": jina_tokenized["attention_mask"],
+        }
+        
+        import gc
+        del chunks, chunks_nested, tokenized, jina_tokenized, texts, chunker
+        gc.collect()
+        
+        return out
 
     # tokenize the dataset
     tokenized = split_dataset.map(
