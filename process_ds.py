@@ -97,6 +97,17 @@ def main():
         }
         
         import gc
+        import pyarrow as pa
+        import semchunk
+        
+        # Forcibly clear semchunk global caches in case memoize=False didn't fully work
+        if hasattr(semchunk, '_memoized_token_counters'):
+            semchunk._memoized_token_counters.clear()
+            
+        # Release PyArrow memory pool (common cause of hidden OOMs in datasets.map)
+        if hasattr(pa, 'default_memory_pool'):
+            pa.default_memory_pool().release_unused()
+            
         del chunks, chunks_nested, texts, chunker, t_ids, t_masks, j_ids, j_masks
         gc.collect()
         
