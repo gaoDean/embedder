@@ -99,7 +99,7 @@ def main():
 
                 # pop the processable portions e.g. pop the first 30 entires
                 to_process = portions_buffer[:cfg.DS_PROCESS_BATCH]
-                portions_buffer = portions_buffer[cfg.DS_PROCESS_BATCH:]
+                del portions_buffer[:cfg.DS_PROCESS_BATCH]
 
                 tokenized = tokenizer(to_process, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
 
