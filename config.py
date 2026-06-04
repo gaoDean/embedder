@@ -2,7 +2,7 @@ import torch
 
 # Model Configuration
 MODEL_NAME = "Qwen/Qwen2.5-0.5B"
-EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v5-text-nano"
+EMBEDDING_MODEL_NAME = "jinaai/jina-embeddings-v5-text-small"
 CONTEXT_DIM = 768
 HIDDEN_SIZE = None  # Will be retrieved from model config if None
 WANDB_EN = True
