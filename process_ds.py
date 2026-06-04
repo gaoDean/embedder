@@ -55,39 +55,49 @@ def main():
             "e_attention_mask": ...,
         }
         """
-        global _worker_tokenizer, _worker_jina_tokenizer
+        global _worker_tokenizer, _worker_jina_tokenizer, _worker_chunker
         if _worker_tokenizer is None:
             _worker_tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
             _worker_jina_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
+            # Pass memoize=False to prevent semchunk from caching unique strings unboundedly
+            _worker_chunker = semchunk.chunkerify(_worker_tokenizer, cfg.CHUNK_SIZE, memoize=False)
 
         tokenizer = _worker_tokenizer
         jina_tokenizer = _worker_jina_tokenizer
-        
-        # Instantiate chunker per batch to avoid unbounded internal caching across batches
-        chunker = semchunk.chunkerify(tokenizer, cfg.CHUNK_SIZE)
+        chunker = _worker_chunker
 
-        # lists of texts, of len batch
         texts = batch["text"]
-
-        # list of lists, of shape (batch, n_chunks unknown)
         chunks_nested = chunker(texts)
-
-        # flatten the list of lists into a single list of strings
         chunks = [chunk for doc_chunks in chunks_nested for chunk in doc_chunks]
 
-        # Use return_tensors="np" to avoid creating millions of tiny Python lists
-        tokenized = tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE, return_tensors="np")
-        jina_tokenized = jina_tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE, return_tensors="np")
-
+        import numpy as np
+        
+        # Sub-batch tokenization to prevent massive peak memory allocation in Rust and heap fragmentation
+        sub_batch_size = 2000
+        t_ids, t_masks, j_ids, j_masks = [], [], [], []
+        
+        for i in range(0, len(chunks), sub_batch_size):
+            sub_chunks = chunks[i:i+sub_batch_size]
+            
+            t = tokenizer(sub_chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE, return_tensors="np")
+            jt = jina_tokenizer(sub_chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE, return_tensors="np")
+            
+            t_ids.append(t["input_ids"])
+            t_masks.append(t["attention_mask"])
+            j_ids.append(jt["input_ids"])
+            j_masks.append(jt["attention_mask"])
+            
+            del t, jt, sub_chunks
+            
         out = {
-            "input_ids": tokenized["input_ids"],
-            "attention_mask": tokenized["attention_mask"],
-            "e_input_ids": jina_tokenized["input_ids"],
-            "e_attention_mask": jina_tokenized["attention_mask"],
+            "input_ids": np.concatenate(t_ids, axis=0) if t_ids else np.array([]),
+            "attention_mask": np.concatenate(t_masks, axis=0) if t_masks else np.array([]),
+            "e_input_ids": np.concatenate(j_ids, axis=0) if j_ids else np.array([]),
+            "e_attention_mask": np.concatenate(j_masks, axis=0) if j_masks else np.array([]),
         }
         
         import gc
-        del chunks, chunks_nested, tokenized, jina_tokenized, texts, chunker
+        del chunks, chunks_nested, texts, chunker, t_ids, t_masks, j_ids, j_masks
         gc.collect()
         
         return out
@@ -97,6 +107,7 @@ def main():
             process,
             batched=True,
             batch_size=cfg.DS_PROCESS_BATCH,
+            writer_batch_size=cfg.DS_PROCESS_BATCH,
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
