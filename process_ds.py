@@ -16,10 +16,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 torch.set_num_threads(1)
 num_proc_load_dataset = 8
 
-_worker_tokenizer = None
-_worker_jina_tokenizer = None
-_worker_chunker = None
-
 def main():
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
@@ -55,70 +51,31 @@ def main():
             "e_attention_mask": ...,
         }
         """
-        global _worker_tokenizer, _worker_jina_tokenizer, _worker_chunker
-        if _worker_tokenizer is None:
-            _worker_tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
-            _worker_jina_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
-            # Pass memoize=False to prevent semchunk from caching unique strings unboundedly
-            _worker_chunker = semchunk.chunkerify(_worker_tokenizer, cfg.CHUNK_SIZE, memoize=False)
+        chunker = semchunk.chunkerify(tokenizer, cfg.CHUNK_SIZE)
 
-        tokenizer = _worker_tokenizer
-        jina_tokenizer = _worker_jina_tokenizer
-        chunker = _worker_chunker
-
+        # lists of texts, of len batch
         texts = batch["text"]
+
+        # list of lists, of shape (batch, n_chunks unknown)
         chunks_nested = chunker(texts)
+
+        # flatten the list of lists into a single list of strings
         chunks = [chunk for doc_chunks in chunks_nested for chunk in doc_chunks]
 
-        import numpy as np
-        
-        # Sub-batch tokenization to prevent massive peak memory allocation in Rust and heap fragmentation
-        sub_batch_size = 2000
-        t_ids, t_masks, j_ids, j_masks = [], [], [], []
-        
-        for i in range(0, len(chunks), sub_batch_size):
-            sub_chunks = chunks[i:i+sub_batch_size]
-            
-            t = tokenizer(sub_chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE, return_tensors="np")
-            jt = jina_tokenizer(sub_chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE, return_tensors="np")
-            
-            t_ids.append(t["input_ids"])
-            t_masks.append(t["attention_mask"])
-            j_ids.append(jt["input_ids"])
-            j_masks.append(jt["attention_mask"])
-            
-            del t, jt, sub_chunks
-            
-        out = {
-            "input_ids": np.concatenate(t_ids, axis=0) if t_ids else np.array([]),
-            "attention_mask": np.concatenate(t_masks, axis=0) if t_masks else np.array([]),
-            "e_input_ids": np.concatenate(j_ids, axis=0) if j_ids else np.array([]),
-            "e_attention_mask": np.concatenate(j_masks, axis=0) if j_masks else np.array([]),
-        }
-        
-        import gc
-        import pyarrow as pa
-        import semchunk
-        
-        # Forcibly clear semchunk global caches in case memoize=False didn't fully work
-        if hasattr(semchunk, '_memoized_token_counters'):
-            semchunk._memoized_token_counters.clear()
-            
-        # Release PyArrow memory pool (common cause of hidden OOMs in datasets.map)
-        if hasattr(pa, 'default_memory_pool'):
-            pa.default_memory_pool().release_unused()
-            
-        del chunks, chunks_nested, texts, chunker, t_ids, t_masks, j_ids, j_masks
-        gc.collect()
-        
-        return out
+        tokenized = tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
+        jina_tokenized = jina_tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
+
+        tokenized["e_input_ids"] = jina_tokenized["input_ids"]
+        tokenized["e_attention_mask"] = jina_tokenized["attention_mask"]
+
+        # Cast BatchEncoding to a standard dict to prevent Rust Encoding object memory leaks
+        return dict(tokenized)
 
     # tokenize the dataset
     tokenized = split_dataset.map(
             process,
             batched=True,
             batch_size=cfg.DS_PROCESS_BATCH,
-            writer_batch_size=cfg.DS_PROCESS_BATCH,
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
