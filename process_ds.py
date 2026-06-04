@@ -16,10 +16,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 torch.set_num_threads(1)
 num_proc_load_dataset = 8
 
-portions_buffer = []
-jina = None
-chunker = None
-
 def main():
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
@@ -38,6 +34,7 @@ def main():
     # })
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
+    jina_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME)
 
     if os.path.exists(cfg.DATASET_CACHE_DIR):
         print("dataset already exists")
@@ -50,30 +47,11 @@ def main():
         returns {
             "input_ids": ...,
             "attention_mask": ...,
-            "embeddings": ...,
+            "e_input_ids": ...,
+            "e_attention_mask": ...,
         }
         """
-        global portions_buffer
-        global jina
-        global chunker
-
-        if jina is None:
-            if torch.cuda.is_available():
-                device = f"cuda:{rank % torch.cuda.device_count()}"
-            else:
-                device = cfg.DEVICE
-            torch.set_float32_matmul_precision('high')
-            jina = Jina(device=device)
-
-        if chunker is None:
-            if torch.cuda.is_available():
-
-                device = f"cuda:{rank % torch.cuda.device_count()}"
-            else:
-                device = cfg.DEVICE
-
-            chunker = semchunk.chunkerify(tokenizer, cfg.CHUNK_SIZE)
-
+        chunker = semchunk.chunkerify(tokenizer, cfg.CHUNK_SIZE)
 
         # lists of texts, of len batch
         texts = batch["text"]
@@ -81,48 +59,17 @@ def main():
         # list of lists, of shape (batch, n_chunks unknown)
         chunks = chunker(texts)
 
-        # the idea is that we split the paragraphs into "portions"
-        # which are each one to two sentences long
-        # so we can make better use of our dataset
-        for batch in chunks:
-            for chunk in batch:
-                portions_buffer.append(chunk)
+        tokenized = tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
+        jina_tokenized = jina_tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
 
-        # number of portions available to process
-        # lets say buffer reaches a length of 40, if DS_PROCESS_BATCH is 30, then we can process 30 portions
-        # if buffer reaches length of 80, we can process 30 + 30 portions sequentially
-        # this is to keep batch size constant to take advantage of compilation
-        num_portions_batches = len(portions_buffer) // cfg.DS_PROCESS_BATCH
-        output = None
-        if num_portions_batches >= 1:
-            for i in range(num_portions_batches):
+        tokenized["e_input_ids"] = jina_tokenized["input_ids"]
+        tokenized["e_attention_mask"] = jina_tokenized["attention_mask"]
 
-                # pop the processable portions e.g. pop the first 30 entires
-                to_process = portions_buffer[:cfg.DS_PROCESS_BATCH]
-                del portions_buffer[:cfg.DS_PROCESS_BATCH]
-
-                tokenized = tokenizer(to_process, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
-
-                embeddings = None
-                with torch.no_grad():
-                    embeddings = F.layer_norm(jina.model(to_process, cfg.CHUNK_SIZE), (cfg.CONTEXT_DIM,))
-
-                # Cast to float16 and convert to a list of numpy arrays.
-                # This prevents python's .tolist() from upcasting everything to 64-bit float objects,
-                # which would cause the Hugging Face dataset to consume 4x more disk space.
-                tokenized["embeddings"] = list(embeddings.detach().cpu().to(torch.float16).numpy())
-
-                # merge output with the tokenized dict
-                if output is None:
-                    output = tokenized
-                else:
-                    output = {key: output[key] + tokenized[key] for key in tokenized}
-
+        # merge output with the tokenized dict
         if output is None:
-            # Hugging Face map requires a dictionary with correct keys and empty lists
-            # to avoid silently reverting/ignoring the whole mapping process
-            output = {key: [] for key in tokenizer([""], max_length=cfg.TRUNC_LENGTH).keys()}
-            output["embeddings"] = []
+            output = tokenized
+        else:
+            output = {key: output[key] + tokenized[key] for key in tokenized}
 
         return output
 
@@ -134,7 +81,6 @@ def main():
             remove_columns=['text'],
             desc="processing dataset",
             num_proc=num_proc,
-            with_rank=True,
             )
 
     tokenized.save_to_disk(cfg.DATASET_CACHE_DIR)
