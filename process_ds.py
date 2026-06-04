@@ -16,6 +16,10 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 torch.set_num_threads(1)
 num_proc_load_dataset = 8
 
+_worker_tokenizer = None
+_worker_jina_tokenizer = None
+_worker_chunker = None
+
 def main():
     dataset = load_dataset("Skylion007/openwebtext", num_proc=num_proc_load_dataset)
     split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
@@ -51,7 +55,15 @@ def main():
             "e_attention_mask": ...,
         }
         """
-        chunker = semchunk.chunkerify(tokenizer, cfg.CHUNK_SIZE)
+        global _worker_tokenizer, _worker_jina_tokenizer, _worker_chunker
+        if _worker_tokenizer is None:
+            _worker_tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
+            _worker_jina_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
+            _worker_chunker = semchunk.chunkerify(_worker_tokenizer, cfg.CHUNK_SIZE)
+
+        chunker = _worker_chunker
+        tokenizer = _worker_tokenizer
+        jina_tokenizer = _worker_jina_tokenizer
 
         # lists of texts, of len batch
         texts = batch["text"]
