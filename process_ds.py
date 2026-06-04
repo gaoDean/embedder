@@ -57,7 +57,10 @@ def main():
         texts = batch["text"]
 
         # list of lists, of shape (batch, n_chunks unknown)
-        chunks = chunker(texts)
+        chunks_nested = chunker(texts)
+        
+        # flatten the list of lists into a single list of strings
+        chunks = [chunk for doc_chunks in chunks_nested for chunk in doc_chunks]
 
         tokenized = tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
         jina_tokenized = jina_tokenizer(chunks, add_special_tokens=True, truncation=True, padding="max_length", max_length=cfg.CHUNK_SIZE)
@@ -65,13 +68,7 @@ def main():
         tokenized["e_input_ids"] = jina_tokenized["input_ids"]
         tokenized["e_attention_mask"] = jina_tokenized["attention_mask"]
 
-        # merge output with the tokenized dict
-        if output is None:
-            output = tokenized
-        else:
-            output = {key: output[key] + tokenized[key] for key in tokenized}
-
-        return output
+        return tokenized
 
     # tokenize the dataset
     tokenized = split_dataset.map(
