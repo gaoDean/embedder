@@ -34,7 +34,7 @@ def main():
     # })
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
-    jina_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME)
+    jina_tokenizer = AutoTokenizer.from_pretrained(cfg.EMBEDDING_MODEL_NAME, trust_remote_code=True)
 
     if os.path.exists(cfg.DATASET_CACHE_DIR):
         print("dataset already exists")
@@ -58,7 +58,7 @@ def main():
 
         # list of lists, of shape (batch, n_chunks unknown)
         chunks_nested = chunker(texts)
-        
+
         # flatten the list of lists into a single list of strings
         chunks = [chunk for doc_chunks in chunks_nested for chunk in doc_chunks]
 
